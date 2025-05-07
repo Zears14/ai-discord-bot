@@ -1,191 +1,273 @@
-// Discord Gemma AI Bot
-// This bot connects to Discord and sends user queries to Gemma 3 27b using google-genai
-
 // Required packages:
 // npm install discord.js dotenv @google/generative-ai
 
-// Load environment variables from .env file
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, EmbedBuilder, Colors } = require('discord.js');
-const { GoogleGenerativeAI } = require('@google/genai');
+const { Client, GatewayIntentBits, EmbedBuilder, Colors, AttachmentBuilder } = require('discord.js');
+const { GoogleGenAI, Modality } = require('@google/genai');
 
-// Discord client setup with necessary intents
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages, 
+    GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
   ]
 });
 
-// Initialize Google Generative AI with your API key
 const genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+const GEMMA_MODEL_NAME = "gemma-3-27b-it";
+const GEMINI_MODEL_NAME = "gemini-2.0-flash-lite";
+const IMAGE_GEN_MODEL_NAME = "gemini-2.0-flash-exp-image-generation";
 
-// The model name for Gemma 3 27b
-const MODEL_NAME = "gemma-3-27b-it";
-
-// Cooldown tracking - Map to store user IDs and their last command timestamp
 const cooldowns = new Map();
+const imageGenCooldowns = new Map();
+const IMAGE_GEN_COOLDOWN_TIME = 60000; // 60 seconds
 
-// Function to interact with Gemma model
-async function generateResponse(userPrompt, username) {
+async function generateTextResponse(userPrompt, username, serverName, memberCount, onlineMemberUsernames) {
   try {
-    // Create a system prompt that instructs the model to be concise and handle policy violations
-    const systemPrompt = `You are a helpful assistant that provides concise, direct answers. 
-Keep your responses brief and to the point. If a query appears to violate content policies 
-or asks for harmful, illegal, or unethical information, respond only with "I aint doing that, use google or something" and nothing else.
-The user asking this question has the username: ${username}.`;
-    
-    // Generate content
+    const systemPrompt = `You are a helpful assistant that provides concise answers with Gen Z vibes.
+    Keep your responses brief but use slang, emojis, and trendy expressions. Sound like you're texting a friend.
+    If a query appears to violate content policies or asks for harmful, illegal, or unethical information,
+    respond only with "I ain't doing that, use google or something" and nothing else.
+    The user asking this question has the username: ${username}.
+    The current Discord server is called: ${serverName}.
+    This server has ${memberCount} human members.
+    The usernames of the human members in this server are: ${onlineMemberUsernames.join(', ')}.
+    The following text is the user question:`;
+
     const response = await genAI.models.generateContent({
-      model: MODEL_NAME,
-      contents: userPrompt,
+      model: GEMMA_MODEL_NAME,
+      contents: systemPrompt + userPrompt,
       config: {
-        systemInstruction: systemPrompt,
-      },
+        maxOutputTokens: 1000
+      }
     });
-    return response.text
+    return response.text;
   } catch (error) {
-    console.error('Error generating response:', error);
-    
-    // Check if error is related to safety filters or content policies
-    if (error.message && (error.message.includes("safety") || 
-                          error.message.includes("blocked") || 
-                          error.message.includes("policy"))) {
-      return "No";
+    console.error('Error generating text response:', error);
+    if (error.message?.includes("safety") || error.message?.includes("blocked") || error.message?.includes("policy")) {
+      return "I ain't doing that, use google or something";
     }
-    
     return `Error: ${error.message}`;
   }
 }
 
-// Event handler for when the bot is ready
+async function generateImageResponse(userPrompt, imageUrl, mimeType, username, serverName, memberCount, onlineMemberUsernames) {
+  try {
+    const systemPrompt = `You are a helpful assistant that provides concise answers with Gen Z vibes.
+    Keep your responses brief but use slang, emojis, and trendy expressions. Sound like you're texting a friend.
+    If a query appears to violate content policies or asks for harmful, illegal, or unethical information,
+    respond only with "I ain't doing that, use google or something" and nothing else.
+    The user asking this question has the username: ${username}.
+    The current Discord server is called: ${serverName}.
+    This server has ${memberCount} human members.
+    The usernames of the human members in this server are: ${onlineMemberUsernames.join(', ')}.
+    The following text is the user question:`;
+
+    const response = await fetch(imageUrl);
+    const imageArrayBuffer = await response.arrayBuffer();
+    const base64ImageData = Buffer.from(imageArrayBuffer).toString('base64');
+
+    const result = await genAI.models.generateContent({
+      model: GEMINI_MODEL_NAME,
+      contents: [
+        {
+          inlineData: {
+            mimeType: mimeType,
+            data: base64ImageData,
+          },
+        },
+        { text: systemPrompt + userPrompt }
+      ],
+      config: {
+        maxOutputTokens: 1000
+      }
+    });
+    return result.text;
+  } catch (error) {
+    console.error('Error generating image response:', error);
+    return `Error understanding image: ${error.message}`;
+  }
+}
+
+async function generateImage(prompt, username, serverName, memberCount, onlineMemberUsernames) {
+  try {
+    const systemPrompt = `You are a creative image generator. The user asking for this image has the username: ${username}. The current Discord server is called: ${serverName}. This server has ${memberCount} human members. The usernames of the human members in this server are: ${onlineMemberUsernames.join(', ')}. Generate an image based on the following prompt:`;
+
+    const result = await genAI.models.generateContent({
+      model: IMAGE_GEN_MODEL_NAME,
+      contents: [{ text: systemPrompt + prompt }],
+      config: {
+        responseModalities: [Modality.TEXT, Modality.IMAGE],
+      },
+    });
+
+    const imagePart = result.candidates[0]?.content?.parts?.find(part => part.inlineData);
+
+    if (imagePart?.inlineData?.data) {
+      const base64Image = imagePart.inlineData.data;
+      const buffer = Buffer.from(base64Image, "base64");
+      return buffer;
+    } else {
+      return "No image generated.";
+    }
+  } catch (error) {
+    console.error('Error generating image:', error);
+    if (error.message?.includes("safety") || error.message?.includes("blocked") || error.message?.includes("policy")) {
+      return "I ain't doing that, that prompt is sus.";
+    }
+    return `Error generating image: ${error.message}`;
+  }
+}
+
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
-  console.log('Bot is ready to respond to $ai commands!');
+  console.log('Bot is ready to respond to $ai and $gen commands!');
 });
 
-// Event handler for when a message is created
 client.on('messageCreate', async (message) => {
-  // Ignore messages from bots to prevent potential loops
   if (message.author.bot) return;
-  
-  // Check if the message starts with the command prefix
-  if (message.content.startsWith('$ai ')) {
-    // Get the query part (everything after "$ai ")
-    const query = message.content.slice(4).trim();
-    
-    if (!query) {
+
+  const serverName = message.guild.name;
+  const memberCount = message.guild.members.cache.filter(member => !member.user.bot).size;
+  const onlineMemberUsernames = message.guild.members.cache
+  .filter(member => !member.user.bot && member.presence?.status !== 'offline')
+  .map(member => member.user.username);
+
+  if (message.content.startsWith('$ai')) {
+    const query = message.content.slice(3).trim();
+
+    if (!query && message.attachments.size === 0) {
       message.reply('What am i supposed to do nga?');
       return;
     }
 
-    // Check cooldown
     const userId = message.author.id;
     const now = Date.now();
-    const cooldownTime = 20000; // 20 seconds in milliseconds
-    
+    const cooldownTime = 20000;
+
     if (cooldowns.has(userId)) {
       const expirationTime = cooldowns.get(userId) + cooldownTime;
-      
       if (now < expirationTime) {
         const timeLeft = (expirationTime - now) / 1000;
-        message.reply(`Please wait ${timeLeft.toFixed(1)}. Nga slow down or else API will have no`);
+        message.reply(`Chillax for ${timeLeft.toFixed(1)} seconds.`);
         return;
       }
     }
-    
-    // Set cooldown for user
     cooldowns.set(userId, now);
-    
-    // Optional: Show typing indicator to indicate the bot is processing
-    message.channel.sendTyping();
-    
-    // Create a loading embed
+
     const loadingEmbed = new EmbedBuilder()
-      .setColor(Colors.Blue)
-      .setAuthor({
-        name: 'Zears AI H',
-        iconURL: client.user.displayAvatarURL()
-      })
-      .setDescription('Processing your query with zears ai h')
-      .setFooter({
-        text: `Requested by ${message.author.tag}`,
-        iconURL: message.author.displayAvatarURL()
-      })
-      .setTimestamp();
-    
-    // Send the loading embed
+    .setColor(Colors.Blue)
+    .setAuthor({ name: 'Zears AI H', iconURL: client.user.displayAvatarURL() })
+    .setDescription('Processing your query with zears ai h')
+    .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+    .setTimestamp();
+
     const loadingMessage = await message.reply({ embeds: [loadingEmbed] });
-    
+
     try {
-      // Get response from Gemma (passing username)
-      const aiResponse = await generateResponse(query, message.author.username);
-      
-      // Create response embed
-      const responseEmbed = new EmbedBuilder()
-        .setColor(Colors.Green)
-        .setAuthor({
-          name: 'Zears AI H',
-          iconURL: client.user.displayAvatarURL()
-        })
-        .setFooter({
-          text: `Requested by ${message.author.tag}`,
-          iconURL: message.author.displayAvatarURL()
-        })
-        .setTimestamp();
-      
-      // If the response is too long for Discord embed (4096 char limit)
-      if (aiResponse.length > 4000) {
-        // Split into chunks of 4000 characters
-        const chunks = [];
-        for (let i = 0; i < aiResponse.length; i += 4000) {
-          chunks.push(aiResponse.substring(i, i + 4000));
-        }
-        
-        // Update the first embed with the first chunk
-        responseEmbed.setDescription(chunks[0]);
-        await loadingMessage.edit({ embeds: [responseEmbed] });
-        
-        // Send additional chunks as new embeds
-        for (let i = 1; i < chunks.length; i++) {
-          const additionalEmbed = new EmbedBuilder()
-            .setColor(Colors.Green)
-            .setDescription(chunks[i])
-            .setFooter({
-              text: `Part ${i+1}/${chunks.length} • Requested by ${message.author.tag}`,
-              iconURL: message.author.displayAvatarURL()
-            });
-          
-          await message.channel.send({ embeds: [additionalEmbed] });
+      let aiResponse;
+
+      if (message.attachments.size > 0) {
+        const attachment = message.attachments.first();
+        if (attachment?.contentType?.startsWith('image/')) {
+          aiResponse = await generateImageResponse(query, attachment.url, attachment.contentType, message.author.username, serverName, memberCount, onlineMemberUsernames);
+        } else {
+          aiResponse = await generateTextResponse(query, message.author.username, serverName, memberCount, onlineMemberUsernames);
         }
       } else {
-        // Response fits in a single embed
-        responseEmbed.setDescription(aiResponse);
-        await loadingMessage.edit({ embeds: [responseEmbed] });
+        aiResponse = await generateTextResponse(query, message.author.username, serverName, memberCount, onlineMemberUsernames);
+      }
+
+      const responseEmbed = new EmbedBuilder()
+      .setColor(Colors.Green)
+      .setAuthor({ name: 'Zears AI H', iconURL: client.user.displayAvatarURL() })
+      .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .setTimestamp()
+      .setDescription(aiResponse.length > 4000 ? aiResponse.substring(0, 4000) + '...' : aiResponse);
+
+      await loadingMessage.edit({ embeds: [responseEmbed] });
+
+      if (aiResponse.length > 4000) {
+        const chunks = [];
+        for (let i = 4000; i < aiResponse.length; i += 4000) {
+          chunks.push(aiResponse.substring(i, Math.min(aiResponse.length, i + 4000)));
+        }
+        for (let i = 0; i < chunks.length; i++) {
+          const additionalEmbed = new EmbedBuilder()
+          .setColor(Colors.Green)
+          .setDescription(chunks[i])
+          .setFooter({ text: `Part ${i + 2}/${chunks.length + 1} • Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() });
+          await message.channel.send({ embeds: [additionalEmbed] });
+        }
       }
     } catch (error) {
       console.error('Error:', error);
-      
-      // Create error embed
       const errorEmbed = new EmbedBuilder()
+      .setColor(Colors.Red)
+      .setAuthor({ name: 'Zears AI H', iconURL: client.user.displayAvatarURL() })
+      .setDescription('Ts is having no.')
+      .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .setTimestamp();
+      await loadingMessage.edit({ embeds: [errorEmbed] });
+    }
+  } else if (message.content.startsWith('$gen')) {
+    const prompt = message.content.slice(4).trim();
+
+    if (!prompt) {
+      message.reply('What do you want me to generate nga?');
+      return;
+    }
+
+    const userId = message.author.id;
+    const now = Date.now();
+
+    if (imageGenCooldowns.has(userId)) {
+      const expirationTime = imageGenCooldowns.get(userId) + IMAGE_GEN_COOLDOWN_TIME;
+      if (now < expirationTime) {
+        const timeLeft = (expirationTime - now) / 1000;
+        message.reply(`Chillax for ${timeLeft.toFixed(1)} seconds before generating again.`);
+        return;
+      }
+    }
+    imageGenCooldowns.set(userId, now);
+
+    const loadingEmbed = new EmbedBuilder()
+    .setColor(Colors.Purple)
+    .setAuthor({ name: 'Zears AI Image Gen', iconURL: client.user.displayAvatarURL() })
+    .setDescription(`Generating image for: "${prompt}"`)
+    .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+    .setTimestamp();
+
+    const loadingMessage = await message.reply({ embeds: [loadingEmbed] });
+
+    try {
+      const imageBuffer = await generateImage(prompt, message.author.username, serverName, memberCount, onlineMemberUsernames);
+
+      if (imageBuffer instanceof Buffer) {
+        const attachment = new AttachmentBuilder(imageBuffer, { name: 'generated_image.png' });
+        await loadingMessage.delete();
+        await message.channel.send({ files: [attachment] });
+      } else {
+        const errorEmbed = new EmbedBuilder()
         .setColor(Colors.Red)
-        .setAuthor({
-          name: 'Zears AI H',
-          iconURL: client.user.displayAvatarURL()
-        })
-        .setDescription('Ts is having no.')
-        .setFooter({
-          text: `Requested by ${message.author.tag}`,
-          iconURL: message.author.displayAvatarURL()
-        })
+        .setAuthor({ name: 'Zears AI Image Gen', iconURL: client.user.displayAvatarURL() })
+        .setDescription(`Failed to generate image: ${imageBuffer}`)
+        .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
         .setTimestamp();
-      
+        await loadingMessage.edit({ embeds: [errorEmbed] });
+      }
+    } catch (error) {
+      console.error('Image generation error:', error);
+      const errorEmbed = new EmbedBuilder()
+      .setColor(Colors.Red)
+      .setAuthor({ name: 'Zears AI Image Gen', iconURL: client.user.displayAvatarURL() })
+      .setDescription(`Failed to generate image. Error: ${error.message}`)
+      .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .setTimestamp();
       await loadingMessage.edit({ embeds: [errorEmbed] });
     }
   }
 });
 
-// Log the bot in using the token from .env
 client.login(process.env.DISCORD_TOKEN);
