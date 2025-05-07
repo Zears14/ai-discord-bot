@@ -36,7 +36,11 @@ const IMAGE_GEN_MODEL_NAME = "gemini-2.0-flash-preview-image-generation";
 
 const cooldowns = new Map();
 const imageGenCooldowns = new Map();
+
 const IMAGE_GEN_COOLDOWN_TIME = 60000; // 60 seconds
+const IMAGE_GEN_API_URL = 'https://ir-api.myqa.cc/v1/openai/images/generations';
+const IMAGE_GEN_API_KEY = process.env.IMAGEROUTER_API_KEY; // Ensure you have this in your .env
+
 
 
 async function generateTextResponse(userPrompt, username, serverName, memberCount, onlineMemberUsernames) {
@@ -105,36 +109,31 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
     return `Error understanding image: ${error.message}`;
   }
 }
-
-async function generateImage(prompt, username, serverName, memberCount, onlineMemberUsernames) {
+async function generateImage(prompt) {
   try {
-    const systemPrompt = `You are a creative image generator. The user asking for this image has the username: ${username}. The current Discord server is called: ${serverName}. This server has ${memberCount} human members. The usernames of the human members in this server are: ${onlineMemberUsernames.join(', ')}. Generate an image based on the following prompt:`;
+    const options = {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${IMAGE_GEN_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ "prompt": prompt, "model": "stabilityai/sdxl-turbo:free", "quality": "auto" })
+    };
 
-    const result = await genAI.models.generateContent({
-      model: IMAGE_GEN_MODEL_NAME,
-      contents: [{ text: systemPrompt + prompt }],
-      config: {
-        responseModalities: [Modality.TEXT, Modality.IMAGE],
-      },
-    });
+    const response = await fetch(IMAGE_GEN_API_URL, options);
+    const data = await response.json();
 
-    const imagePart = result.candidates[0]?.content?.parts?.find(part => part.inlineData);
-
-    if (imagePart?.inlineData?.data) {
-      const base64Image = imagePart.inlineData.data;
-      const buffer = Buffer.from(base64Image, "base64");
+    if (data && data.data && data.data.length > 0 && data.data[0].b64_json) {
+      const base64Image = data.data[0].b64_json;
+      const buffer = Buffer.from(base64Image, 'base64');
       return buffer;
     } else {
-      return "No image generated.";
+      console.error('Image generation API error:', data);
+      return "Failed to generate image.";
     }
   } catch (error) {
     console.error('Error generating image:', error);
-    if (error.message?.includes("safety") || error.message?.includes("blocked") || error.message?.includes("policy")) {
-      return "I ain't doing that, that prompt is sus.";
-    }
     return `Error generating image: ${error.message}`;
   }
 }
+
 
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -258,7 +257,7 @@ client.on('messageCreate', async (message) => {
     const loadingMessage = await message.reply({ embeds: [loadingEmbed] });
 
     try {
-      const imageBuffer = await generateImage(prompt, message.author.username, serverName, memberCount, onlineMemberUsernames);
+      const imageBuffer = await generateImage(prompt);
 
       if (imageBuffer instanceof Buffer) {
         const attachment = new AttachmentBuilder(imageBuffer, { name: 'generated_image.png' });
