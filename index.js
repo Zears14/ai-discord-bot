@@ -14,6 +14,21 @@ const client = new Client({
   ]
 });
 
+// Koyeb thing
+const express = require('express')
+const app = express()
+const port = 8000
+
+app.get('/', (req, res) => {
+  res.send('Discord Bot is alive!')
+})
+
+app.listen(port, () => {
+  console.log(`Example app listening on port ${port}`)
+})
+
+
+
 const genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 const GEMMA_MODEL_NAME = "gemma-3-27b-it";
 const GEMINI_MODEL_NAME = "gemini-2.0-flash-lite";
@@ -22,6 +37,7 @@ const IMAGE_GEN_MODEL_NAME = "gemini-2.0-flash-exp-image-generation";
 const cooldowns = new Map();
 const imageGenCooldowns = new Map();
 const IMAGE_GEN_COOLDOWN_TIME = 60000; // 60 seconds
+
 
 async function generateTextResponse(userPrompt, username, serverName, memberCount, onlineMemberUsernames) {
   try {
