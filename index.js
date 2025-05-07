@@ -8,7 +8,7 @@
 require('dotenv').config();
 
 const { Client, GatewayIntentBits, EmbedBuilder, Colors } = require('discord.js');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI } = require('@google/genai');
 
 // Discord client setup with necessary intents
 const client = new Client({
@@ -20,10 +20,10 @@ const client = new Client({
 });
 
 // Initialize Google Generative AI with your API key
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+const genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
 // The model name for Gemma 3 27b
-const MODEL_NAME = "models/gemma-3-27b";
+const MODEL_NAME = "gemma-3-27b-it";
 
 // Cooldown tracking - Map to store user IDs and their last command timestamp
 const cooldowns = new Map();
@@ -34,29 +34,18 @@ async function generateResponse(userPrompt, username) {
     // Create a system prompt that instructs the model to be concise and handle policy violations
     const systemPrompt = `You are a helpful assistant that provides concise, direct answers. 
 Keep your responses brief and to the point. If a query appears to violate content policies 
-or asks for harmful, illegal, or unethical information, respond only with "No" and nothing else.
+or asks for harmful, illegal, or unethical information, respond only with "I aint doing that, use google or something" and nothing else.
 The user asking this question has the username: ${username}.`;
     
-    // Combine system prompt with user query
-    const prompt = [
-      { text: systemPrompt, role: "system" },
-      { text: userPrompt, role: "user" }
-    ];
-    
-    // Initialize the model
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
-    
     // Generate content
-    const result = await model.generateContent(prompt);
-    
-    // Check if response was blocked due to safety settings
-    if (result.response.promptFeedback && 
-        result.response.promptFeedback.blockReason) {
-      return "No";
-    }
-    
-    const response = result.response;
-    return response.text();
+    const response = await genAI.models.generateContent({
+      model: MODEL_NAME,
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+      },
+    });
+    return response.text
   } catch (error) {
     console.error('Error generating response:', error);
     
@@ -88,7 +77,7 @@ client.on('messageCreate', async (message) => {
     const query = message.content.slice(4).trim();
     
     if (!query) {
-      message.reply('Please provide a query after the $ai command.');
+      message.reply('What am i supposed to do nga?');
       return;
     }
 
@@ -102,7 +91,7 @@ client.on('messageCreate', async (message) => {
       
       if (now < expirationTime) {
         const timeLeft = (expirationTime - now) / 1000;
-        message.reply(`Please wait ${timeLeft.toFixed(1)} more seconds before using the command again.`);
+        message.reply(`Please wait ${timeLeft.toFixed(1)}. Nga slow down or else API will have no`);
         return;
       }
     }
@@ -117,10 +106,10 @@ client.on('messageCreate', async (message) => {
     const loadingEmbed = new EmbedBuilder()
       .setColor(Colors.Blue)
       .setAuthor({
-        name: 'Gemma AI',
+        name: 'Zears AI H',
         iconURL: client.user.displayAvatarURL()
       })
-      .setDescription('Processing your query with Gemma 3 27b...')
+      .setDescription('Processing your query with zears ai h')
       .setFooter({
         text: `Requested by ${message.author.tag}`,
         iconURL: message.author.displayAvatarURL()
@@ -138,7 +127,7 @@ client.on('messageCreate', async (message) => {
       const responseEmbed = new EmbedBuilder()
         .setColor(Colors.Green)
         .setAuthor({
-          name: 'Gemma AI',
+          name: 'Zears AI H',
           iconURL: client.user.displayAvatarURL()
         })
         .setFooter({
@@ -183,10 +172,10 @@ client.on('messageCreate', async (message) => {
       const errorEmbed = new EmbedBuilder()
         .setColor(Colors.Red)
         .setAuthor({
-          name: 'Gemma AI',
+          name: 'Zears AI H',
           iconURL: client.user.displayAvatarURL()
         })
-        .setDescription('Sorry, there was an error processing your request.')
+        .setDescription('Ts is having no.')
         .setFooter({
           text: `Requested by ${message.author.tag}`,
           iconURL: message.author.displayAvatarURL()
