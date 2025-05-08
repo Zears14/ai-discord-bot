@@ -32,7 +32,6 @@ app.listen(port, () => {
 const genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 const GEMMA_MODEL_NAME = "gemma-3-27b-it";
 const GEMINI_MODEL_NAME = "gemini-2.0-flash-lite";
-const IMAGE_GEN_MODEL_NAME = "gemini-2.0-flash-preview-image-generation";
 
 const cooldowns = new Map();
 const imageGenCooldowns = new Map();
