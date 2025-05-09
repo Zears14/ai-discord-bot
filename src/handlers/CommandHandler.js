@@ -9,6 +9,9 @@ const path = require('path');
 const CONFIG = require('../config/config');
 const ErrorHandler = require('../utils/errorHandler');
 
+// Cache for command files to prevent repeated disk reads
+const commandCache = new Map();
+
 /**
  * @class CommandHandler
  * @description Handles command registration and execution
@@ -24,6 +27,33 @@ class CommandHandler {
     this.aliases = new Collection();
     this.categories = new Set();
     this.cooldowns = new Collection();
+    
+    // WeakMap for storing command metadata to allow garbage collection
+    this.commandMetadata = new WeakMap();
+    
+    // Initialize command cache cleanup interval
+    this._initCacheCleanup();
+  }
+
+  /**
+   * Initialize periodic cache cleanup
+   * @private
+   */
+  _initCacheCleanup() {
+    // Clean up cooldowns every hour
+    setInterval(() => {
+      const now = Date.now();
+      for (const [commandName, timestamps] of this.cooldowns) {
+        for (const [userId, timestamp] of timestamps) {
+          if (now - timestamp > CONFIG.COMMANDS.COOLDOWNS.DEFAULT * 1000) {
+            timestamps.delete(userId);
+          }
+        }
+        if (timestamps.size === 0) {
+          this.cooldowns.delete(commandName);
+        }
+      }
+    }, 3600000); // 1 hour
   }
 
   /**
@@ -35,23 +65,38 @@ class CommandHandler {
       const commandsPath = path.join(__dirname, '..', 'commands');
       const commandFiles = await fs.readdir(commandsPath);
 
-      for (const file of commandFiles) {
-        if (!file.endsWith('.js') || file === 'BaseCommand.js') continue;
+      // Process commands in parallel for better performance
+      await Promise.all(commandFiles.map(async (file) => {
+        if (!file.endsWith('.js') || file === 'BaseCommand.js') return;
 
         try {
-          const Command = require(path.join(commandsPath, file));
+          // Check cache first
+          let Command;
+          if (commandCache.has(file)) {
+            Command = commandCache.get(file);
+          } else {
+            Command = require(path.join(commandsPath, file));
+            commandCache.set(file, Command);
+          }
+
           const command = new Command(this.client);
 
           if (!command.name) {
             console.warn(`Command in ${file} is missing a name`);
-            continue;
+            return;
           }
+
+          // Store command metadata in WeakMap
+          this.commandMetadata.set(command, {
+            file,
+            loadTime: Date.now()
+          });
 
           this.commands.set(command.name, command);
           this.categories.add(command.category);
 
-          // Register aliases
-          if (command.aliases && command.aliases.length) {
+          // Register aliases using a more efficient approach
+          if (command.aliases?.length) {
             command.aliases.forEach(alias => {
               this.aliases.set(alias, command.name);
             });
@@ -61,7 +106,7 @@ class CommandHandler {
         } catch (error) {
           console.error(`Failed to load command ${file}:`, error);
         }
-      }
+      }));
 
       console.log(`Loaded ${this.commands.size} commands in ${this.categories.size} categories`);
     } catch (error) {
@@ -77,24 +122,18 @@ class CommandHandler {
    * @returns {number} Remaining cooldown time in seconds
    */
   checkCooldown(userId, command) {
-    if (!this.cooldowns.has(command.name)) {
-      this.cooldowns.set(command.name, new Collection());
-    }
-
     const now = Date.now();
-    const timestamps = this.cooldowns.get(command.name);
     const cooldownAmount = (command.cooldown || CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
 
-    if (timestamps.has(userId)) {
-      const expirationTime = timestamps.get(userId) + cooldownAmount;
-
-      if (now < expirationTime) {
-        return (expirationTime - now) / 1000;
-      }
+    // Use Map's get-or-set pattern for better performance
+    const timestamps = this.cooldowns.get(command.name) || this.cooldowns.set(command.name, new Collection()).get(command.name);
+    
+    const expirationTime = timestamps.get(userId);
+    if (expirationTime && now < expirationTime) {
+      return (expirationTime - now) / 1000;
     }
 
-    timestamps.set(userId, now);
-    setTimeout(() => timestamps.delete(userId), cooldownAmount);
+    timestamps.set(userId, now + cooldownAmount);
     return 0;
   }
 
@@ -104,14 +143,18 @@ class CommandHandler {
    * @returns {Promise<void>}
    */
   async handleMessage(message) {
+    // Early returns for better performance
     if (message.author.bot || message.system) return;
 
     const prefix = message.content.startsWith(CONFIG.MESSAGE.PREFIX) ? CONFIG.MESSAGE.PREFIX : null;
     if (!prefix) return;
 
-    const args = message.content.slice(prefix.length).trim().split(/ +/);
+    // Optimize string operations
+    const content = message.content.slice(prefix.length).trim();
+    const args = content.split(/\s+/);
     const commandName = args.shift().toLowerCase();
 
+    // Use Map's get-or-set pattern for better performance
     const command = this.commands.get(commandName) || this.commands.get(this.aliases.get(commandName));
     if (!command) return;
 
@@ -119,9 +162,10 @@ class CommandHandler {
       return message.reply('This command is currently disabled.');
     }
 
-    // Check permissions
-    if (command.permissions && command.permissions.length) {
-      const missingPermissions = command.permissions.filter(perm => !message.member.permissions.has(perm));
+    // Check permissions using Set for O(1) lookup
+    if (command.permissions?.length) {
+      const userPerms = new Set(message.member.permissions.toArray());
+      const missingPermissions = command.permissions.filter(perm => !userPerms.has(perm));
       if (missingPermissions.length) {
         return message.reply(`You need the following permissions to use this command: ${missingPermissions.join(', ')}`);
       }
