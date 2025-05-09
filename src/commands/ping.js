@@ -1,4 +1,5 @@
 const BaseCommand = require('./BaseCommand');
+const CONFIG = require("../config/config");
 
 class PingCommand extends BaseCommand {
   constructor(client) {
@@ -7,7 +8,7 @@ class PingCommand extends BaseCommand {
       description: 'Check the bot\'s latency',
       category: 'Utility',
       usage: 'ping',
-      cooldown: 2,
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
       aliases: ['latency']
     });
   }

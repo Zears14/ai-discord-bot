@@ -9,7 +9,7 @@ class HelpCommand extends BaseCommand {
       description: 'Shows all available commands',
       category: 'Utility',
       usage: 'help [command]',
-      cooldown: 5,
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
       aliases: ['commands', 'h']
     });
   }

@@ -10,7 +10,7 @@ class GrowCommand extends BaseCommand {
             description: 'Try to grow your Dih (24h cooldown)',
             category: 'Economy',
             usage: 'grow',
-            cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT, // 24 hours in seconds
+            cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY, // 24 hours in seconds
             aliases: ['g']
         });
     }

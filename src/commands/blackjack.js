@@ -50,7 +50,7 @@ class BlackjackCommand extends BaseCommand {
             description: 'Play blackjack with your Dih',
             category: 'Economy',
             usage: 'blackjack <bet>',
-            cooldown: 30,
+            cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
             aliases: ['bj', '21']
         });
     }

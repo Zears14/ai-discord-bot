@@ -15,7 +15,7 @@ class EightBallCommand extends BaseCommand {
       description: 'Ask the magic 8ball a question',
       usage: '8ball <question>',
       aliases: ['8b', 'magic8ball'],
-      cooldown: 3
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT
     });
   }
 

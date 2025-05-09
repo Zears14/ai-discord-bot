@@ -10,7 +10,7 @@ class WagerCommand extends BaseCommand {
             description: 'Wager your Dih with another user',
             category: 'Economy',
             usage: 'wager <@user> <amount>',
-            cooldown: 30,
+            cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
             aliases: ['bet', 'gamble']
         });
     }
