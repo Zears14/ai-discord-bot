@@ -8,6 +8,8 @@ const botConfig = require('./bot');
 const aiConfig = require('./ai');
 const embedConfig = require('./embed');
 const commandsConfig = require('./commands.config');
+const imageConfig = require('./image');
+const economyConfig = require('./economy');
 
 /**
  * @constant {Object} CONFIG - Main configuration object
@@ -21,11 +23,11 @@ const CONFIG = {
     VERSION: botConfig.BOT.VERSION
   },
 
-  // AI models
-  MODELS: aiConfig.MODELS,
+  // AI models and settings
+  AI: aiConfig,
 
   // Image generation settings
-  IMAGE_GEN: aiConfig.IMAGE_GEN,
+  IMAGE_GEN: imageConfig,
 
   // Discord message settings
   MESSAGE: botConfig.MESSAGE,
@@ -44,11 +46,14 @@ const CONFIG = {
   // Discord embed texts
   EMBED: embedConfig.EMBED,
 
-  // AI response settings
-  AI: aiConfig.AI,
+  // Economy settings
+  ECONOMY: economyConfig.ECONOMY,
+  DATABASE: economyConfig.DATABASE,
 
-  // Generated image settings
-  IMAGE_OUTPUT: aiConfig.IMAGE_OUTPUT,
+  // Admin settings
+  ADMIN: {
+    ID: '745984199588315216'
+  },
 
   // Server management (top-level for backward compatibility)
   getServer: () => CONFIG.SERVER.getInstance(),

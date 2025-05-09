@@ -11,7 +11,8 @@ module.exports = {
     AI_RESPONSE: Colors.Green,
     IMAGE_LOADING: Colors.Purple,
     ERROR: Colors.Red,
-    DEFAULT: Colors.Blurple
+    DEFAULT: Colors.Blurple,
+    SUCCESS: Colors.Green
   },
   EMBED: {
     AI_TITLE: 'Zears AI H',

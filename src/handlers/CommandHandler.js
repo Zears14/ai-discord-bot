@@ -79,6 +79,11 @@ class CommandHandler {
             commandCache.set(file, Command);
           }
 
+          // Skip if command is null (e.g., disabled in development mode)
+          if (!Command) {
+            return;
+          }
+
           const command = new Command(this.client);
 
           if (!command.name) {
@@ -104,7 +109,10 @@ class CommandHandler {
 
           console.log(`Loaded command: ${command.name} (${command.category})`);
         } catch (error) {
-          console.error(`Failed to load command ${file}:`, error);
+          // Only log errors for non-null commands
+          if (error.message !== 'Command is not a constructor') {
+            console.error(`Failed to load command ${file}:`, error);
+          }
         }
       }));
 

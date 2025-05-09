@@ -1,5 +1,5 @@
 /**
- * @fileoverview Export AI configuration
+ * @fileoverview AI configuration exports
  * @module config/ai
  */
 

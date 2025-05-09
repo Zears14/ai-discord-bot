@@ -2,11 +2,8 @@
  * @fileoverview AI service for text and image analysis
  * @module services/aiService
  */
-
 const { GoogleGenAI } = require('@google/genai');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 const CONFIG = require('../config/config');
-
 // Initialize Google Generative AI client
 let genAI;
 try {
@@ -25,10 +22,7 @@ try {
  * @returns {string} System prompt
  */
 function createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames) {
-  return `You are a helpful assistant that provides concise answers with Gen Z vibes.
-  Keep your responses brief but use slang, emojis, and trendy expressions. Sound like you're texting a friend.
-  If a query appears to violate content policies or asks for harmful, illegal, or unethical information,
-  respond only with "I ain't doing that, use google or something" and nothing else.
+  return `${CONFIG.AI.AI.SYSTEM_PROMPT}
   The user asking this question has the username: ${username}.
   The current Discord server is called: ${serverName}.
   This server has ${memberCount} human members.
@@ -51,7 +45,7 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
     const fullPrompt = systemPrompt + userPrompt;
 
     const response = await genAI.models.generateContent({
-      model: CONFIG.MODELS.GEMMA,
+      model: CONFIG.AI.MODELS.GEMMA,
       contents: fullPrompt,
       config: {
         maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS
@@ -86,7 +80,7 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
     const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames);
 
     // Fetch image with timeout and retry logic
-    const fetchWithTimeout = async (url, options = {}, retries = 3, timeout = 10000) => {
+    const fetchWithTimeout = async (url, options = {}, retries = CONFIG.AI.IMAGE.MAX_RETRIES, timeout = CONFIG.AI.IMAGE.FETCH_TIMEOUT) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -114,7 +108,7 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
     const base64ImageData = Buffer.from(imageArrayBuffer).toString('base64');
 
     const result = await genAI.models.generateContent({
-      model: CONFIG.MODELS.GEMINI,
+      model: CONFIG.AI.MODELS.GEMINI,
       contents: [
         {
           inlineData: {

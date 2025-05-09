@@ -4,229 +4,227 @@
  */
 
 const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const economy = require('../services/economy');
+const { EmbedBuilder } = require('discord.js');
 const CONFIG = require('../config/config');
 
-class BlackjackCommand extends BaseCommand {
-  constructor(client) {
-    super(client, {
-      name: 'blackjack',
-      description: 'Play a game of blackjack',
-      category: 'Fun',
-      usage: 'blackjack',
-      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
-      aliases: ['bj', '21']
-    });
+// Function to draw a random card
+function drawCard() {
+    const card = CONFIG.COMMANDS.BLACKJACK.RANKS[Math.floor(Math.random() * CONFIG.COMMANDS.BLACKJACK.RANKS.length)];
+    const suit = CONFIG.COMMANDS.BLACKJACK.SUITS[Math.floor(Math.random() * CONFIG.COMMANDS.BLACKJACK.SUITS.length)];
+    return { card, suit };
+}
 
-    // Store active games
-    this.activeGames = new Map();
-  }
+// Function to format card with suit
+function formatCard(cardObj) {
+    return `${cardObj.card}${cardObj.suit}`;
+}
 
-  // Card deck and values
-  static SUITS = ['♠️', '♥️', '♦️', '♣️'];
-  static RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-  static CARD_VALUES = {
-    'A': 11,
-    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
-    'J': 10, 'Q': 10, 'K': 10
-  };
-
-  // Create a new deck
-  createDeck() {
-    const deck = [];
-    for (const suit of BlackjackCommand.SUITS) {
-      for (const rank of BlackjackCommand.RANKS) {
-        deck.push({ suit, rank });
-      }
-    }
-    return this.shuffleDeck(deck);
-  }
-
-  // Shuffle deck using Fisher-Yates algorithm
-  shuffleDeck(deck) {
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    return deck;
-  }
-
-  // Calculate hand value
-  calculateHandValue(hand) {
+// Function to calculate hand value
+function calculateHandValue(hand) {
     let value = 0;
     let aces = 0;
 
-    for (const card of hand) {
-      if (card.rank === 'A') {
-        aces++;
-        value += 11;
-      } else {
-        value += BlackjackCommand.CARD_VALUES[card.rank];
-      }
+    for (const cardObj of hand) {
+        if (cardObj.card === 'A') {
+            aces++;
+            value += 11;
+        } else {
+            value += CONFIG.COMMANDS.BLACKJACK.CARD_VALUES[cardObj.card];
+        }
     }
 
     // Adjust for aces
     while (value > 21 && aces > 0) {
-      value -= 10;
-      aces--;
+        value -= 10;
+        aces--;
     }
 
     return value;
-  }
+}
 
-  // Format hand for display
-  formatHand(hand) {
-    return hand.map(card => `${card.rank}${card.suit}`).join(' ');
-  }
-
-  // Create game embed
-  createGameEmbed(game, showDealerCard = false) {
-    const playerValue = this.calculateHandValue(game.playerHand);
-    const dealerValue = this.calculateHandValue(game.dealerHand);
-    const dealerDisplay = showDealerCard 
-      ? `Dealer's hand (${dealerValue}): ${this.formatHand(game.dealerHand)}`
-      : `Dealer's hand: ${game.dealerHand[0].rank}${game.dealerHand[0].suit} ?️`;
-
-    return new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎲 Blackjack')
-      .setDescription(
-        `${dealerDisplay}\n\n` +
-        `Your hand (${playerValue}): ${this.formatHand(game.playerHand)}\n\n` +
-        (game.status ? `**${game.status}**` : '')
-      )
-      .setFooter({ text: `Game ID: ${game.id}`, iconURL: game.author.displayAvatarURL() })
-      .setTimestamp();
-  }
-
-  // Create game buttons
-  createGameButtons(game) {
-    return new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('hit')
-          .setLabel('Hit')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('stand')
-          .setLabel('Stand')
-          .setStyle(ButtonStyle.Secondary)
-      );
-  }
-
-  // Handle dealer's turn
-  async handleDealerTurn(game) {
-    while (this.calculateHandValue(game.dealerHand) < 17) {
-      game.dealerHand.push(game.deck.pop());
+class BlackjackCommand extends BaseCommand {
+    constructor(client) {
+        super(client, {
+            name: 'blackjack',
+            description: 'Play blackjack with your Dih',
+            category: 'Economy',
+            usage: 'blackjack <bet>',
+            cooldown: 30,
+            aliases: ['bj', '21']
+        });
     }
 
-    const playerValue = this.calculateHandValue(game.playerHand);
-    const dealerValue = this.calculateHandValue(game.dealerHand);
+    async execute(message, args) {
+        const userId = message.author.id;
+        const guildId = message.guild.id;
 
-    if (dealerValue > 21) {
-      game.status = 'Dealer busts! You win! 🎉';
-    } else if (dealerValue > playerValue) {
-      game.status = 'Dealer wins! 😢';
-    } else if (dealerValue < playerValue) {
-      game.status = 'You win! 🎉';
-    } else {
-      game.status = 'Push! It\'s a tie! 🤝';
-    }
-
-    await game.message.edit({
-      embeds: [this.createGameEmbed(game, true)],
-      components: []
-    });
-
-    this.activeGames.delete(game.id);
-  }
-
-  async execute(message, args) {
-    // Check if user already has an active game
-    if (this.activeGames.has(message.author.id)) {
-      return message.reply('You already have an active game! Finish it first.');
-    }
-
-    // Create new game
-    const game = {
-      id: message.author.id,
-      author: message.author,
-      message: null,
-      deck: this.createDeck(),
-      playerHand: [],
-      dealerHand: [],
-      status: null
-    };
-
-    // Deal initial cards
-    game.playerHand.push(game.deck.pop(), game.deck.pop());
-    game.dealerHand.push(game.deck.pop(), game.deck.pop());
-
-    // Check for blackjack
-    const playerValue = this.calculateHandValue(game.playerHand);
-    const dealerValue = this.calculateHandValue(game.dealerHand);
-
-    if (playerValue === 21) {
-      game.status = dealerValue === 21 ? 'Push! Both have blackjack! 🤝' : 'Blackjack! You win! 🎉';
-      const embed = this.createGameEmbed(game, true);
-      await message.reply({ embeds: [embed] });
-      return;
-    }
-
-    // Send initial game state
-    const embed = this.createGameEmbed(game);
-    const buttons = this.createGameButtons(game);
-    const gameMessage = await message.reply({ embeds: [embed], components: [buttons] });
-    game.message = gameMessage;
-
-    // Store game
-    this.activeGames.set(message.author.id, game);
-
-    // Create button collector
-    const collector = gameMessage.createMessageComponentCollector({
-      time: 60000 // 1 minute timeout
-    });
-
-    collector.on('collect', async (interaction) => {
-      if (interaction.user.id !== message.author.id) {
-        await interaction.reply({ content: 'This is not your game!', ephemeral: true });
-        return;
-      }
-
-      const game = this.activeGames.get(message.author.id);
-      if (!game) return;
-
-      if (interaction.customId === 'hit') {
-        game.playerHand.push(game.deck.pop());
-        const playerValue = this.calculateHandValue(game.playerHand);
-
-        if (playerValue > 21) {
-          game.status = 'Bust! You lose! 😢';
-          await game.message.edit({
-            embeds: [this.createGameEmbed(game, true)],
-            components: []
-          });
-          this.activeGames.delete(message.author.id);
-        } else {
-          await game.message.edit({
-            embeds: [this.createGameEmbed(game)],
-            components: [this.createGameButtons(game)]
-          });
+        // Check arguments
+        if (args.length !== 1) {
+            return message.reply('Please provide an amount to bet. Usage: `blackjack <bet>`');
         }
-      } else if (interaction.customId === 'stand') {
-        await this.handleDealerTurn(game);
-      }
 
-      await interaction.deferUpdate();
-    });
+        // Parse bet amount
+        const bet = parseInt(args[0]);
+        if (isNaN(bet) || bet <= 0) {
+            return message.reply('Please provide a valid amount to bet.');
+        }
 
-    collector.on('end', () => {
-      if (this.activeGames.has(message.author.id)) {
-        this.activeGames.delete(message.author.id);
-        gameMessage.edit({ components: [] }).catch(() => {});
-      }
-    });
-  }
+        // Check if user has enough balance
+        const balance = await economy.getBalance(userId, guildId);
+        if (balance < bet) {
+            return message.reply(`You don't have enough Dih! Your balance: ${balance} cm`);
+        }
+
+        // Initialize game
+        const playerHand = [drawCard(), drawCard()];
+        const dealerHand = [drawCard(), drawCard()];
+        const playerValue = calculateHandValue(playerHand);
+
+        // Create initial game embed
+        const gameEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.IN_PROGRESS)
+            .setTitle(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack`)
+            .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm`)
+            .addFields(
+                { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`, value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`, inline: true },
+                { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`, value: `${formatCard(dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`, inline: true }
+            )
+            .setFooter({ text: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit or Stand` });
+
+        // Check for blackjack
+        if (playerValue === 21) {
+            const dealerValue = calculateHandValue(dealerHand);
+            if (dealerValue === 21) {
+                await economy.updateBalance(userId, guildId, 0); // Push
+                gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH)
+                    .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Blackjack! Push - your bet is returned.`)
+                    .addFields(
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`, value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`, inline: true },
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`, value: `${dealerHand.map(formatCard).join(' ')} (${dealerValue})`, inline: true }
+                    );
+                return message.reply({ embeds: [gameEmbed] });
+            } else {
+                const winnings = Math.floor(bet * CONFIG.COMMANDS.BLACKJACK.GAME.BLACKJACK_PAYOUT);
+                await economy.updateBalance(userId, guildId, winnings);
+                gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.WIN)
+                    .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Blackjack! You win ${winnings} cm Dih!`)
+                    .addFields(
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`, value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`, inline: true },
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`, value: `${dealerHand.map(formatCard).join(' ')} (${dealerValue})`, inline: true }
+                    );
+                return message.reply({ embeds: [gameEmbed] });
+            }
+        }
+
+        // Create buttons for hit/stand
+        const row = {
+            type: 1,
+            components: [
+                {
+                    type: 2,
+                    style: 1,
+                    label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} Hit`,
+                    custom_id: 'hit'
+                },
+                {
+                    type: 2,
+                    style: 4,
+                    label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.STAND} Stand`,
+                    custom_id: 'stand'
+                }
+            ]
+        };
+
+        const gameReply = await message.reply({
+            embeds: [gameEmbed],
+            components: [row]
+        });
+
+        // Create collector for button interactions
+        const filter = i => i.user.id === userId;
+        const collector = gameReply.createMessageComponentCollector({ filter, time: CONFIG.COMMANDS.BLACKJACK.GAME.TIMEOUT });
+
+        collector.on('collect', async i => {
+            if (i.customId === 'hit') {
+                playerHand.push(drawCard());
+                const playerValue = calculateHandValue(playerHand);
+                
+                if (playerValue > 21) {
+                    await economy.updateBalance(userId, guildId, -bet);
+                    gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE)
+                        .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} You drew: ${formatCard(playerHand[playerHand.length - 1])}\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BUST} Bust! You lose ${bet} cm Dih.`)
+                        .addFields(
+                            { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`, value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`, inline: true },
+                            { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`, value: `${dealerHand.map(formatCard).join(' ')} (${calculateHandValue(dealerHand)})`, inline: true }
+                        );
+                    await i.update({
+                        embeds: [gameEmbed],
+                        components: []
+                    });
+                    collector.stop();
+                } else {
+                    gameEmbed.setFields(
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`, value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`, inline: true },
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`, value: `${formatCard(dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`, inline: true }
+                    );
+                    await i.update({
+                        embeds: [gameEmbed],
+                        components: [row]
+                    });
+                }
+            } else if (i.customId === 'stand') {
+                // Dealer's turn
+                let dealerValue = calculateHandValue(dealerHand);
+                while (dealerValue < CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE) {
+                    dealerHand.push(drawCard());
+                    dealerValue = calculateHandValue(dealerHand);
+                }
+
+                const playerValue = calculateHandValue(playerHand);
+                let result;
+                let color;
+
+                if (dealerValue > 21) {
+                    result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Dealer busts! You win ${bet} cm Dih!`;
+                    await economy.updateBalance(userId, guildId, bet);
+                    color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
+                } else if (dealerValue > playerValue) {
+                    result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.LOSE} Dealer wins! You lose ${bet} cm Dih.`;
+                    await economy.updateBalance(userId, guildId, -bet);
+                    color = CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE;
+                } else if (dealerValue < playerValue) {
+                    result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} You win ${bet} cm Dih!`;
+                    await economy.updateBalance(userId, guildId, bet);
+                    color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
+                } else {
+                    result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Push - your bet is returned.`;
+                    color = CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH;
+                }
+
+                gameEmbed.setColor(color)
+                    .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${result}`)
+                    .setFields(
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`, value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`, inline: true },
+                        { name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`, value: `${dealerHand.map(formatCard).join(' ')} (${dealerValue})`, inline: true }
+                    );
+
+                await i.update({
+                    embeds: [gameEmbed],
+                    components: []
+                });
+                collector.stop();
+            }
+        });
+
+        collector.on('end', async (collected, reason) => {
+            if (reason === 'time') {
+                gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE)
+                    .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TIMEOUT} Game timed out!`);
+                await message.reply({ embeds: [gameEmbed] });
+            }
+        });
+    }
 }
 
 module.exports = BlackjackCommand; 

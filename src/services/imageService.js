@@ -3,7 +3,6 @@
  * @module services/imageService
  */
 
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 const CONFIG = require('../config/config');
 
 /**
@@ -21,13 +20,13 @@ async function generateImage(prompt) {
       },
       body: JSON.stringify({
         "prompt": prompt,
-        "model": CONFIG.IMAGE_GEN.MODEL,
-        "quality": CONFIG.IMAGE_GEN.QUALITY
+        "model": CONFIG.IMAGE_GEN.IMAGE_GEN.MODEL,
+        "quality": CONFIG.IMAGE_GEN.IMAGE_GEN.QUALITY
       }),
       timeout: 30000 // 30 second timeout
     };
 
-    const response = await fetch(CONFIG.IMAGE_GEN.API_URL, options);
+    const response = await fetch(CONFIG.IMAGE_GEN.IMAGE_GEN.API_URL, options);
 
     if (!response.ok) {
       const errorData = await response.text();

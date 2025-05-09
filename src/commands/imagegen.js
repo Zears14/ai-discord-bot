@@ -37,7 +37,7 @@ class ImageGenCommand extends BaseCommand {
       });
 
       const imageBuffer = await generateImage(prompt);
-      const attachment = new AttachmentBuilder(imageBuffer, { name: CONFIG.IMAGE_OUTPUT.FILENAME });
+      const attachment = new AttachmentBuilder(imageBuffer, { name: CONFIG.IMAGE_GEN.IMAGE_OUTPUT.FILENAME });
 
       // Try to delete loading message but continue if it fails
       await loadingMessage.delete().catch(err => {
