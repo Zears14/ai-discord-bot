@@ -237,6 +237,30 @@ async function setBalance(userId, guildId, amount) {
     }
 }
 
+/**
+ * Get top users by balance
+ * @param {string} guildId - Discord guild ID
+ * @param {number} limit - Number of users to return
+ * @returns {Promise<Array>} Array of top users with their balances
+ */
+async function getTopUsers(guildId, limit = 10) {
+    try {
+        const db = await connectDB();
+        const collection = db.collection(CONFIG.DATABASE.COLLECTION);
+        
+        const topUsers = await collection
+            .find({ guildId })
+            .sort({ balance: -1 })
+            .limit(limit)
+            .toArray();
+            
+        return topUsers;
+    } catch (error) {
+        console.error('Error getting top users:', error);
+        throw new Error('Failed to get leaderboard. Please try again later.');
+    }
+}
+
 // Graceful shutdown handling
 async function cleanup() {
     try {
@@ -260,5 +284,7 @@ module.exports = {
     canGrow,
     getLastGrow,
     updateLastGrow,
-    setBalance
+    setBalance,
+    cleanup,
+    getTopUsers
 }; 
