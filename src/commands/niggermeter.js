@@ -62,6 +62,9 @@ class NiggerMeterCommand extends BaseCommand {
       .setTimestamp();
 
     await message.reply({ embeds: [embed] });
+    if (percentage >= 80) {
+      await message.reply("https://cdn.discordapp.com/attachments/1360498657526288606/1371722935215194262/alarm.mov");
+    }
   }
 }
 

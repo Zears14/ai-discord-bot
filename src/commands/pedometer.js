@@ -49,6 +49,9 @@ class PedoMeterCommand extends BaseCommand {
       .setTimestamp();
 
     await message.reply({ embeds: [embed] });
+    if (percentage >= 80) {
+      await message.reply("Bro is the next: https://cdn.discordapp.com/attachments/1360498657526288606/1371722555542605824/61c0d0d3-a54f-4d30-8ee4-c5f68ed6dbb4-JosephArthurBowlesMorrison.png");
+    }
   }
 }
 
