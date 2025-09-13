@@ -25,7 +25,7 @@ class AICommand extends BaseCommand {
     let query = args.join(' ');
 
     // Fetch conversation history
-    const messages = await message.channel.messages.fetch({ limit: 11 });
+    const messages = await message.channel.messages.fetch({ limit: 51 });
     const history = messages
       .filter(m => m.id !== message.id && (!m.author.bot || m.author.id === this.client.user.id))
       .map(m => {
