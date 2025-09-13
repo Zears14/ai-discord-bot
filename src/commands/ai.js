@@ -22,7 +22,32 @@ class AICommand extends BaseCommand {
   }
 
   async execute(message, args) {
-    const query = args.join(' ');
+    let query = args.join(' ');
+
+    // Fetch conversation history
+    const messages = await message.channel.messages.fetch({ limit: 11 });
+    const history = messages
+      .filter(m => m.id !== message.id && (!m.author.bot || m.author.id === this.client.user.id))
+      .map(m => {
+        if (m.author.id === this.client.user.id && m.embeds.length > 0) {
+          const embed = m.embeds[0];
+          return `${m.author.username}: ${embed.description || ''}`;
+        } else {
+          return `${m.author.username}: ${m.content}`;
+        }
+      })
+      .reverse()
+      .join('\n');
+
+    // Handle reply context
+    if (message.reference) {
+      try {
+        const repliedTo = await message.channel.messages.fetch(message.reference.messageId);
+        query = `(in reply to ${repliedTo.author.username}: "${repliedTo.content}") ${query}`;
+      } catch (err) {
+        console.warn('Failed to fetch replied to message:', err);
+      }
+    }
 
     if (!query && message.attachments.size === 0) {
       return message.reply(CONFIG.EMBED.EMPTY_QUERY)
@@ -46,13 +71,14 @@ class AICommand extends BaseCommand {
             query,
             attachment.url,
             attachment.contentType,
-            ...serverInfo
+            ...serverInfo,
+            history
           );
         } else {
-          aiResponse = await generateTextResponse(query, ...serverInfo);
+          aiResponse = await generateTextResponse(query, ...serverInfo, history);
         }
       } else {
-        aiResponse = await generateTextResponse(query, ...serverInfo);
+        aiResponse = await generateTextResponse(query, ...serverInfo, history);
       }
 
       const responseEmbed = createResponseEmbed(aiResponse, message, this.client);

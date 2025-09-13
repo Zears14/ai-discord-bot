@@ -10,45 +10,46 @@ const CONFIG = require('../config/config');
  * @param {string} prompt - Image generation prompt
  * @returns {Promise<Buffer>} Generated image buffer
  */
-async function generateImage(prompt) {
+async function generateImage(prompt, negative_prompt = null) {
   try {
-    const options = {
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+
+    if (!accountId || !apiToken) {
+      throw new Error('Cloudflare account ID or API token is not set in environment variables.');
+    }
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/bytedance/stable-diffusion-xl-lightning`;
+
+    const payload = { prompt };
+    if (negative_prompt) {
+      payload.negative_prompt = negative_prompt;
+    }
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.IMAGEROUTER_API_KEY}`,
+        'Authorization': `Bearer ${apiToken}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        "prompt": prompt,
-        "model": CONFIG.IMAGE_GEN.IMAGE_GEN.MODEL,
-        "quality": CONFIG.IMAGE_GEN.IMAGE_GEN.QUALITY
-      }),
-      timeout: 30000 // 30 second timeout
-    };
-
-    const response = await fetch(CONFIG.IMAGE_GEN.IMAGE_GEN.API_URL, options);
+      body: JSON.stringify(payload)
+    });
 
     if (!response.ok) {
       const errorData = await response.text();
-      throw new Error(`API responded with status ${response.status}: ${errorData}`);
+      throw new Error(`Cloudflare API responded with status ${response.status}: ${errorData}`);
     }
 
-    const data = await response.json();
+    const imageBuffer = await response.arrayBuffer();
+    return Buffer.from(imageBuffer);
 
-    if (!data || !data.data || !data.data.length || !data.data[0].b64_json) {
-      console.error('Invalid image generation API response:',
-                    JSON.stringify(data, null, 2).substring(0, 500) + '...');
-      throw new Error('Failed to generate image - invalid response format');
-    }
-
-    const base64Image = data.data[0].b64_json;
-    return Buffer.from(base64Image, 'base64');
   } catch (error) {
-    console.error('Error generating image:', error);
+    console.error('Error generating image with Cloudflare AI:', error);
     throw new Error(`Image generation failed: ${error.message || 'Unknown error'}`);
   }
 }
 
 module.exports = {
   generateImage
-}; 
+};
+ 

@@ -7,10 +7,10 @@ class GrowCommand extends BaseCommand {
     constructor(client) {
         super(client, {
             name: 'grow',
-            description: 'Try to grow your Dih (24h cooldown)',
+            description: 'Try to grow your Dih (12h cooldown)',
             category: 'Economy',
             usage: 'grow',
-            cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY, // 24 hours in seconds
+            cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
             aliases: ['g']
         });
     }
@@ -22,7 +22,7 @@ class GrowCommand extends BaseCommand {
         // Check cooldown
         if (!await economy.canGrow(userId, guildId)) {
             const lastGrow = await economy.getLastGrow(userId, guildId);
-            const hoursLeft = 24 - ((new Date() - lastGrow) / (1000 * 60 * 60));
+            const hoursLeft = CONFIG.ECONOMY.GROW_INTERVAL - ((new Date() - lastGrow) / (1000 * 60 * 60));
             
             const cooldownEmbed = new EmbedBuilder()
                 .setColor(CONFIG.COLORS.ERROR)
@@ -38,16 +38,23 @@ class GrowCommand extends BaseCommand {
         const currentBalance = await economy.getBalance(userId, guildId);
         
         // Calculate growth
-        let growth;
-        if (currentBalance === 0) {
-            // Always grow if balance is 0
-            growth = Math.floor(Math.random() * 5) + 1; // Random growth between 1-5 cm
+        let growth = 0;
+        const canBeNegative = currentBalance > 20;
+        const isNegative = canBeNegative && Math.random() < 0.2; // 20% chance of negative growth if balance > 20
+
+        if (isNegative) {
+            // Negative growth logic
+            growth = -(Math.floor(Math.random() * 10) + 1); // -1 to -10
         } else {
-            // 50% chance to grow or shrink
-            const willGrow = Math.random() > 0.5;
-            growth = Math.floor(Math.random() * 3) + 1; // Random amount between 1-3 cm
-            if (!willGrow) {
-                growth = -growth;
+            // Positive growth logic
+            const random = Math.random();
+            if (random < 0.7) { // 70% chance for 10-19
+                growth = Math.floor(Math.random() * 10) + 10;
+            } else { // 30% chance for 20+
+                growth = 20;
+                while (Math.random() < 0.5) {
+                    growth++;
+                }
             }
         }
 
@@ -58,16 +65,29 @@ class GrowCommand extends BaseCommand {
         const newBalance = await economy.getBalance(userId, guildId);
 
         // Create result embed
+        const isUltraGrowth = growth >= 20;
         const resultEmbed = new EmbedBuilder()
-            .setColor(growth > 0 ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
-            .setTitle(growth > 0 ? '📈 Growth Successful!' : '📉 Growth Failed')
             .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
             .addFields(
                 { name: 'Change', value: `${growth > 0 ? '+' : ''}${growth} cm`, inline: true },
                 { name: 'New Length', value: `${newBalance} cm`, inline: true }
             )
-            .setFooter({ text: 'Next growth available in 24 hours' })
+            .setFooter({ text: `Next growth available in ${CONFIG.ECONOMY.GROW_INTERVAL} hours` })
             .setTimestamp();
+
+        if (isUltraGrowth) {
+            resultEmbed
+                .setColor(CONFIG.COLORS.ULTRA_GROWTH)
+                .setTitle('🌟 ULTRA GROWTH! 🌟');
+        } else if (growth > 0) {
+            resultEmbed
+                .setColor(CONFIG.COLORS.SUCCESS)
+                .setTitle('📈 Growth Successful!');
+        } else {
+            resultEmbed
+                .setColor(CONFIG.COLORS.ERROR)
+                .setTitle('📉 Shrinkage Occurred');
+        }
 
         await message.reply({ embeds: [resultEmbed] });
     }

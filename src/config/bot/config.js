@@ -12,7 +12,7 @@ module.exports = {
   },
   MESSAGE: {
     SIZE_LIMIT: 4000,
-    ERROR_FALLBACK: "I ain't doing that, use google or something",
+    ERROR_FALLBACK: "I ain't doing that, use google or something, if this is an AI response of something normal, it may just be that the ai is restarted.",
     PREFIX: '$' // Bot command prefix
   },
   SERVER: {

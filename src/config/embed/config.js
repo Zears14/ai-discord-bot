@@ -12,7 +12,8 @@ module.exports = {
     IMAGE_LOADING: Colors.Purple,
     ERROR: Colors.Red,
     DEFAULT: Colors.Blurple,
-    SUCCESS: Colors.Green
+    SUCCESS: Colors.Green,
+    ULTRA_GROWTH: Colors.Gold
   },
   EMBED: {
     AI_TITLE: 'Zears AI H',

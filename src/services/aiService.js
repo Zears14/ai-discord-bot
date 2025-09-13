@@ -21,13 +21,15 @@ try {
  * @param {string[]} onlineMemberUsernames - List of online member usernames
  * @returns {string} System prompt
  */
-function createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames) {
+function createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames, history = null) {
+  const historyPrompt = history ? `Here is the recent chat history:\n${history}\n` : '';
   return `${CONFIG.AI.AI.SYSTEM_PROMPT}
+  ${historyPrompt}
   The user asking this question has the username: ${username}.
   The current Discord server is called: ${serverName}.
   This server has ${memberCount} human members.
   ${onlineMemberUsernames.length > 0 ? `The usernames of some online human members in this server are: ${onlineMemberUsernames.slice(0, 10).join(', ')}${onlineMemberUsernames.length > 10 ? '...' : ''}.` : ''}
-  The following text is the user question:`;
+  The following text is the user question:`
 }
 
 /**
@@ -37,13 +39,16 @@ function createSystemPrompt(username, serverName, memberCount, onlineMemberUsern
  * @param {string} serverName - Discord server name
  * @param {number} memberCount - Number of members in server
  * @param {string[]} onlineMemberUsernames - List of online member usernames
+ * @param {string} history - Conversation history
  * @returns {Promise<string>} AI response
  */
-async function generateTextResponse(userPrompt, username, serverName, memberCount, onlineMemberUsernames) {
+async function generateTextResponse(userPrompt, username, serverName, memberCount, onlineMemberUsernames, history = null) {
   try {
-    const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames);
+    if (genAI === undefined) {
+      genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+    }
+    const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames, history);
     const fullPrompt = systemPrompt + userPrompt;
-
     const response = await genAI.models.generateContent({
       model: CONFIG.AI.MODELS.GEMMA,
       contents: fullPrompt,
@@ -51,6 +56,10 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
         maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS
       }
     });
+
+    if (response.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
+      return CONFIG.MESSAGE.ERROR_FALLBACK;
+    }
 
     return response.text;
   } catch (error) {
@@ -73,11 +82,16 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
  * @param {string} serverName - Discord server name
  * @param {number} memberCount - Number of members in server
  * @param {string[]} onlineMemberUsernames - List of online member usernames
+ * @param {string} history - Conversation history
  * @returns {Promise<string>} AI response
  */
-async function generateImageResponse(userPrompt, imageUrl, mimeType, username, serverName, memberCount, onlineMemberUsernames) {
+async function generateImageResponse(userPrompt, imageUrl, mimeType, username, serverName, memberCount, onlineMemberUsernames, history = null) {
   try {
-    const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames);
+    if (genAI === undefined) {
+      genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+    }
+    const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames, history);
+
 
     // Fetch image with timeout and retry logic
     const fetchWithTimeout = async (url, options = {}, retries = CONFIG.AI.IMAGE.MAX_RETRIES, timeout = CONFIG.AI.IMAGE.FETCH_TIMEOUT) => {
@@ -123,7 +137,11 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
       }
     });
 
-    return result.text;
+    if (response.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
+      return CONFIG.MESSAGE.ERROR_FALLBACK;
+    }
+
+    return response.text;
   } catch (error) {
     console.error('Error generating image response:', error);
     throw new Error(`Image analysis error: ${error.message || 'Unknown error'}`);

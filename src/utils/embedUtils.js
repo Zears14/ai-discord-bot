@@ -46,7 +46,8 @@ function createLoadingEmbed(type, message, client) {
  * @returns {EmbedBuilder} Response embed
  */
 function createResponseEmbed(responseText, message, client) {
-  const sanitizedText = responseText.length > CONFIG.MESSAGE.SIZE_LIMIT
+  const length = responseText.length ?? 0;
+  const sanitizedText =  length > CONFIG.MESSAGE.SIZE_LIMIT
     ? responseText.substring(0, CONFIG.MESSAGE.SIZE_LIMIT) + '...'
     : responseText;
 

@@ -13,16 +13,22 @@ class ImageGenCommand extends BaseCommand {
   constructor(client) {
     super(client, {
       name: 'imagegen',
-      description: 'Generate images using AI',
+      description: 'Generate images using AI. Use "|" to separate the prompt from the negative prompt.',
       category: 'AI',
-      usage: 'imagegen <prompt>',
+      usage: 'imagegen <prompt> | <negative_prompt>',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.IMAGE,
       aliases: ['gen', 'generate', 'img']
     });
   }
 
   async execute(message, args) {
-    const prompt = args.join(' ');
+    const fullPrompt = args.join(' ');
+    if (!fullPrompt) {
+      return message.reply(CONFIG.EMBED.EMPTY_IMAGE_PROMPT)
+        .catch(err => console.error(`Failed to send empty prompt message: ${err.message}`));
+    }
+
+    const [prompt, negative_prompt] = fullPrompt.split('|').map(s => s.trim());
 
     if (!prompt) {
       return message.reply(CONFIG.EMBED.EMPTY_IMAGE_PROMPT)
@@ -36,7 +42,7 @@ class ImageGenCommand extends BaseCommand {
         embeds: [createLoadingEmbed('image', message, this.client)]
       });
 
-      const imageBuffer = await generateImage(prompt);
+      const imageBuffer = await generateImage(prompt, negative_prompt);
       const attachment = new AttachmentBuilder(imageBuffer, { name: CONFIG.IMAGE_GEN.IMAGE_OUTPUT.FILENAME });
 
       // Try to delete loading message but continue if it fails
