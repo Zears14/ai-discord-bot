@@ -129,9 +129,9 @@ async function initializeDatabase() {
             try {
                 await safeQuery(`
                     CREATE TABLE economy (
-                        userid TEXT NOT NULL,
-                        guildid TEXT NOT NULL,
-                        balance INTEGER NOT NULL DEFAULT 0,
+                        userid TEXT NOT NULL CHECK (userid != ''),
+                        guildid TEXT NOT NULL CHECK (guildid != ''),
+                        balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
                         lastgrow TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 00:00:00+00',
                         PRIMARY KEY (userid, guildid)
                     );
@@ -140,15 +140,15 @@ async function initializeDatabase() {
                     CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy(guildid, balance DESC);
                     CREATE INDEX IF NOT EXISTS idx_economy_lastgrow ON economy(lastgrow) WHERE lastgrow > '1970-01-01 00:00:00+00';
                 `);
-                console.log('✅ Economy table created successfully');
+                console.log('✅ Economy table created successfully with balance constraints');
             } catch (createError) {
                 if (createError.code === '42501') { // Permission denied
                     console.error('❌ Permission denied creating table. Please run this SQL as a superuser:');
                     console.error(`
 CREATE TABLE economy (
-    userid TEXT NOT NULL,
-    guildid TEXT NOT NULL,
-    balance INTEGER NOT NULL DEFAULT 0,
+    userid TEXT NOT NULL CHECK (userid != ''),
+    guildid TEXT NOT NULL CHECK (guildid != ''),
+    balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
     lastgrow TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 00:00:00+00',
     PRIMARY KEY (userid, guildid)
 );
@@ -172,6 +172,34 @@ GRANT ALL PRIVILEGES ON TABLE economy TO your_bot_user;
             tableInfo.rows.forEach(row => {
                 console.log(`  - ${row.column_name}: ${row.data_type}`);
             });
+            
+            // Check if balance constraint exists
+            try {
+                const constraintCheck = await safeQuery(`
+                    SELECT conname, pg_get_constraintdef(oid) as definition
+                    FROM pg_constraint 
+                    WHERE conrelid = 'economy'::regclass 
+                    AND contype = 'c'
+                    AND pg_get_constraintdef(oid) LIKE '%balance%';
+                `);
+                
+                if (constraintCheck.rowCount === 0) {
+                    console.log('🔧 Adding balance constraint...');
+                    await safeQuery(`
+                        ALTER TABLE economy 
+                        ADD CONSTRAINT chk_balance_non_negative 
+                        CHECK (balance >= 0);
+                    `);
+                    console.log('✅ Balance constraint added');
+                } else {
+                    console.log('✅ Balance constraints exist:');
+                    constraintCheck.rows.forEach(row => {
+                        console.log(`  - ${row.conname}: ${row.definition}`);
+                    });
+                }
+            } catch (constraintError) {
+                console.warn('⚠️  Could not add/check balance constraint:', constraintError.message);
+            }
         }
         
         return true;
@@ -300,53 +328,76 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
     }
 
     return withTransaction(async (client) => {
-        // Lock and fetch current data (using lowercase column names)
-        const res = await client.query(
-            `SELECT balance FROM economy 
-             WHERE userid = $1 AND guildid = $2 
-             FOR UPDATE`,
-            [userId, guildId]
-        );
-
-        let newBalance;
-        let isNewUser = false;
-
-        if (res.rowCount === 0) {
-            // Create new user
-            newBalance = Math.max(CONFIG.ECONOMY.MIN_BALANCE, CONFIG.DATABASE.DEFAULT_BALANCE + amount);
-            await client.query(
-                `INSERT INTO economy (userid, guildid, balance, lastgrow)
-                 VALUES ($1, $2, $3, $4)`,
-                [userId, guildId, newBalance, new Date(0)]
+        try {
+            // Lock and fetch current data (using lowercase column names)
+            const res = await client.query(
+                `SELECT balance FROM economy 
+                 WHERE userid = $1 AND guildid = $2 
+                 FOR UPDATE`,
+                [userId, guildId]
             );
-            isNewUser = true;
-        } else {
-            // Update existing user
-            const currentBalance = res.rows[0].balance;
-            newBalance = Math.max(CONFIG.ECONOMY.MIN_BALANCE, currentBalance + amount);
+
+            let newBalance;
+            let isNewUser = false;
+            const minBalance = CONFIG.ECONOMY.MIN_BALANCE || 0;
+
+            if (res.rowCount === 0) {
+                // Create new user - ensure non-negative balance
+                const defaultBalance = CONFIG.DATABASE.DEFAULT_BALANCE || 0;
+                newBalance = Math.max(minBalance, defaultBalance + amount);
+                
+                await client.query(
+                    `INSERT INTO economy (userid, guildid, balance, lastgrow)
+                     VALUES ($1, $2, $3, $4)`,
+                    [userId, guildId, newBalance, new Date(0)]
+                );
+                isNewUser = true;
+            } else {
+                // Update existing user - ensure balance doesn't go negative
+                const currentBalance = res.rows[0].balance;
+                const proposedBalance = currentBalance + amount;
+                
+                // Check if the operation would violate minimum balance
+                if (proposedBalance < minBalance) {
+                    throw new Error(
+                        `Transaction would violate minimum balance. ` +
+                        `Current: ${currentBalance}, Change: ${amount}, ` +
+                        `Resulting: ${proposedBalance}, Minimum: ${minBalance}`
+                    );
+                }
+                
+                newBalance = proposedBalance;
+                
+                await client.query(
+                    `UPDATE economy 
+                     SET balance = $3, lastgrow = COALESCE(lastgrow, $4)
+                     WHERE userid = $1 AND guildid = $2`,
+                    [userId, guildId, newBalance, new Date(0)]
+                );
+            }
+
+            // Log transaction for audit trail
+            console.log(`Balance update: ${userId}:${guildId} ${amount > 0 ? '+' : ''}${amount} = ${newBalance} (${reason})`);
+
+            // Invalidate cache
+            invalidateCache(userId, guildId);
+
+            return { 
+                userId, 
+                guildId, 
+                balance: newBalance, 
+                previousBalance: isNewUser ? CONFIG.DATABASE.DEFAULT_BALANCE : res.rows[0]?.balance,
+                amount,
+                reason
+            };
             
-            await client.query(
-                `UPDATE economy 
-                 SET balance = $3, lastgrow = COALESCE(lastgrow, $4)
-                 WHERE userid = $1 AND guildid = $2`,
-                [userId, guildId, newBalance, new Date(0)]
-            );
+        } catch (error) {
+            // Handle database constraint violations
+            if (error.code === '23514') { // Check constraint violation
+                throw new Error(`Balance constraint violation: ${error.detail || 'Balance cannot be negative'}`);
+            }
+            throw error;
         }
-
-        // Log transaction for audit trail
-        console.log(`Balance update: ${userId}:${guildId} ${amount > 0 ? '+' : ''}${amount} = ${newBalance} (${reason})`);
-
-        // Invalidate cache
-        invalidateCache(userId, guildId);
-
-        return { 
-            userId, 
-            guildId, 
-            balance: newBalance, 
-            previousBalance: isNewUser ? CONFIG.DATABASE.DEFAULT_BALANCE : res.rows[0]?.balance,
-            amount,
-            reason
-        };
     });
 }
 
