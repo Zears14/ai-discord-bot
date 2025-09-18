@@ -13,6 +13,7 @@ module.exports = {
     // Economy Settings
     ECONOMY: {
         GROW_INTERVAL: 12, // hours
-        MIN_BALANCE: 0
+        MIN_BALANCE: 0,
+        RICH_THRESHOLD: 500
     }
 }; 

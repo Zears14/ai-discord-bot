@@ -35,7 +35,7 @@ setInterval(() => {
  * @throws {Error} If required environment variables are missing
  */
 function validateEnvironment() {
-  const requiredEnvVars = ['DISCORD_TOKEN', 'GOOGLE_API_KEY', 'IMAGEROUTER_API_KEY'];
+  const requiredEnvVars = ['DISCORD_TOKEN', 'GOOGLE_API_KEY', 'POSTGRES_URI', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'];
   const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
   if (missingVars.length > 0) {
