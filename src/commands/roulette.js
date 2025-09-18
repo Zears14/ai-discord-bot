@@ -1,0 +1,98 @@
+/**
+ * @fileoverview Roulette command for gambling.
+ * @module commands/roulette
+ */
+
+const BaseCommand = require('./BaseCommand');
+const economy = require('../services/economy');
+const { EmbedBuilder } = require('discord.js');
+const CONFIG = require('../config/config');
+
+// Roulette wheel configuration
+const ROULETTE_NUMBERS = [...Array(37).keys()]; // 0-36
+const RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
+const BLACK_NUMBERS = [2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35];
+
+class RouletteCommand extends BaseCommand {
+    constructor(client) {
+        super(client, {
+            name: 'roulette',
+            description: 'Play roulette with your Dih.',
+            category: 'Economy',
+            usage: 'roulette <bet_type> <amount>',
+            cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
+            aliases: ['roul']
+        });
+    }
+
+    async execute(message, args) {
+        const userId = message.author.id;
+        const guildId = message.guild.id;
+
+        // Check arguments
+        if (args.length !== 2) {
+            return message.reply('Please provide a bet type and an amount. Usage: `roulette <bet_type> <amount>`\n**Bet Types:** `red`, `black`, `even`, `odd`, or a number from 0-36.');
+        }
+
+        const betType = args[0].toLowerCase();
+        const amount = parseInt(args[1]);
+
+        // Validate amount
+        if (isNaN(amount) || amount <= 0) {
+            return message.reply('Please provide a valid amount to bet.');
+        }
+
+        // Check balance
+        const balance = await economy.getBalance(userId, guildId);
+        if (balance < amount) {
+            return message.reply(`You don't have enough Dih! Your balance: ${balance} cm`);
+        }
+
+        // Validate bet type
+        const validBetTypes = ['red', 'black', 'even', 'odd', ...ROULETTE_NUMBERS.map(String)];
+        if (!validBetTypes.includes(betType)) {
+            return message.reply('Invalid bet type. Please choose from: `red`, `black`, `even`, `odd`, or a number from 0-36.');
+        }
+
+        // Spin the wheel
+        const winningNumber = ROULETTE_NUMBERS[Math.floor(Math.random() * ROULETTE_NUMBERS.length)];
+        const winningColor = RED_NUMBERS.includes(winningNumber) ? 'red' : (BLACK_NUMBERS.includes(winningNumber) ? 'black' : 'green');
+
+        let winnings = -amount;
+        let resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You lost ${amount} cm Dih.`;
+
+        // Check for win
+        if (betType === winningColor) {
+            winnings = amount; // 2x payout
+            resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You won ${winnings} cm Dih!`;
+        } else if (betType === 'even' && winningNumber % 2 === 0 && winningNumber !== 0) {
+            winnings = amount; // 2x payout
+            resultMessage = `The ball landed on **${winningNumber}**. It's an even number! You won ${winnings} cm Dih!`;
+        } else if (betType === 'odd' && winningNumber % 2 !== 0) {
+            winnings = amount; // 2x payout
+            resultMessage = `The ball landed on **${winningNumber}**. It's an odd number! You won ${winnings} cm Dih!`;
+        } else if (parseInt(betType) === winningNumber) {
+            winnings = amount * 35; // 36x payout
+            resultMessage = `The ball landed on **${winningNumber}**. You hit the number! You won ${winnings} cm Dih!`;
+        }
+
+        // Update balance
+        await economy.updateBalance(userId, guildId, winnings);
+        const newBalance = balance + winnings;
+
+        // Create embed
+        const embed = new EmbedBuilder()
+            .setColor(winnings > 0 ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
+            .setTitle('Roulette')
+            .setDescription(resultMessage)
+            .addFields(
+                { name: 'Your Bet', value: `${betType.toUpperCase()} - ${amount} cm`, inline: true },
+                { name: 'New Balance', value: `${newBalance} cm`, inline: true }
+            )
+            .setTimestamp();
+
+        return message.reply({ embeds: [embed] });
+    }
+}
+
+module.exports = RouletteCommand;
