@@ -761,6 +761,23 @@ process.on('unhandledRejection', (reason, promise) => {
     gracefulShutdown('unhandledRejection');
 });
 
+const jsonbService = require('./jsonbService');
+
+/**
+ * Get last daily timestamp from JSONB
+ */
+async function getLastDaily(userId, guildId) {
+    const lastDaily = await jsonbService.getKey(userId, guildId, 'lastDaily');
+    return lastDaily ? new Date(lastDaily) : new Date(0);
+}
+
+/**
+ * Update last daily timestamp in JSONB
+ */
+async function updateLastDaily(userId, guildId) {
+    return await jsonbService.setKey(userId, guildId, 'lastDaily', new Date().toISOString());
+}
+
 module.exports = {
     // Backward compatible exports
     getBalance,
@@ -771,6 +788,8 @@ module.exports = {
     setBalance,
     getTopUsers,
     cleanup,
+    getLastDaily,
+    updateLastDaily,
     
     // New enhanced features
     getUserData,
