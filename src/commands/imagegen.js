@@ -3,11 +3,11 @@
  * @module commands/imagegen
  */
 
-const BaseCommand = require('./BaseCommand');
-const { AttachmentBuilder } = require('discord.js');
-const { generateImage } = require('../services/imageService');
-const { createLoadingEmbed, createErrorEmbed } = require('../utils/embedUtils');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { AttachmentBuilder } from 'discord.js';
+import { generateImage } from '../services/imageService.js';
+import { createLoadingEmbed, createErrorEmbed } from '../utils/embedUtils.js';
+import CONFIG from '../config/config.js';
 
 class ImageGenCommand extends BaseCommand {
   constructor(client) {
@@ -69,4 +69,4 @@ class ImageGenCommand extends BaseCommand {
   }
 }
 
-module.exports = ImageGenCommand; 
+export default ImageGenCommand; 

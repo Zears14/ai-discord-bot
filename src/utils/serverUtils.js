@@ -58,6 +58,6 @@ async function getServerInfo(message) {
   }
 }
 
-module.exports = {
+export {
   getServerInfo
 }; 

@@ -1,4 +1,5 @@
-const { Pool } = require('pg');
+import pg from 'pg';
+const { Pool } = pg;
 
 const pool = new Pool({
     connectionString: process.env.POSTGRES_URI,
@@ -60,7 +61,7 @@ async function getAllItems() {
     return res.rows;
 }
 
-module.exports = {
+export default {
     createItem,
     getItemById,
     getItemByName,

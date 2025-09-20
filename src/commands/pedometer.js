@@ -3,9 +3,9 @@
  * @module commands/gaymeter
  */
 
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 function getBlueToRedGradient(percentage) {
   const red = Math.round((percentage / 100) * 255);
@@ -55,4 +55,4 @@ class PedoMeterCommand extends BaseCommand {
   }
 }
 
-module.exports = PedoMeterCommand; 
+export default PedoMeterCommand; 

@@ -1,7 +1,11 @@
-const { Collection } = require('discord.js');
-const fs = require('fs').promises;
-const path = require('path');
-const itemsService = require('../services/itemsService');
+import { Collection } from 'discord.js';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import itemsService from '../services/itemsService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class ItemHandler {
     constructor() {
@@ -23,7 +27,8 @@ class ItemHandler {
                 if (!file.endsWith('.js')) continue;
 
                 try {
-                    const item = require(path.join(itemsPath, file));
+                    const itemModule = await import(path.join(itemsPath, file));
+                    const item = itemModule.default;
                     this.items.set(item.name, item);
                     existingItemNames.add(item.name);
 
@@ -71,4 +76,4 @@ class ItemHandler {
     }
 }
 
-module.exports = ItemHandler;
+export default ItemHandler;

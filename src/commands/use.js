@@ -1,8 +1,8 @@
-const BaseCommand = require('./BaseCommand');
-const inventoryService = require('../services/inventoryService');
-const itemsService = require('../services/itemsService');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import inventoryService from '../services/inventoryService.js';
+import itemsService from '../services/itemsService.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class UseCommand extends BaseCommand {
     constructor(client) {
@@ -46,4 +46,4 @@ class UseCommand extends BaseCommand {
     }
 }
 
-module.exports = UseCommand;
+export default UseCommand;

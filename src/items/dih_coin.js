@@ -1,6 +1,6 @@
-const economy = require('../services/economy');
+import economy from '../services/economy.js';
 
-module.exports = {
+export default {
     name: 'dih_coin',
     title: 'Dih Coin',
     type: 'consumable',

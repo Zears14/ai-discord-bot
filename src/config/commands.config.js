@@ -3,23 +3,27 @@
  * @module config/commands.config
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Get all command config files from the commands directory
 const commandsDir = path.join(__dirname, 'commands');
 const commandConfigs = {};
 
-// Read all .js files in the commands directory
-fs.readdirSync(commandsDir)
-  .filter(file => file.endsWith('.js'))
-  .forEach(file => {
-    // Get the name without extension, preserving original case
+const loadCommandConfigs = async () => {
+  const files = await fs.readdir(commandsDir);
+  for (const file of files) {
+    if (!file.endsWith('.js')) continue;
     const name = file.replace('.js', '').toUpperCase();
-    // Import the config file
-    const config = require(path.join(commandsDir, file));
-    // Add to our configs object, using the config directly
-    commandConfigs[name] = config;
-  });
+    const configModule = await import(path.join(commandsDir, file));
+    commandConfigs[name] = configModule.default;
+  }
+};
 
-module.exports = commandConfigs; 
+await loadCommandConfigs();
+
+export default commandConfigs; 

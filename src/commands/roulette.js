@@ -3,10 +3,10 @@
  * @module commands/roulette
  */
 
-const BaseCommand = require('./BaseCommand');
-const economy = require('../services/economy');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import economy from '../services/economy.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 // Roulette wheel configuration
 const ROULETTE_NUMBERS = [...Array(37).keys()]; // 0-36
@@ -129,4 +129,4 @@ class RouletteCommand extends BaseCommand {
 }
 
 
-module.exports = RouletteCommand;
+export default RouletteCommand;

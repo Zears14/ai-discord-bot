@@ -3,9 +3,9 @@
  * @module commands/8ball
  */
 
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class EightBallCommand extends BaseCommand {
   constructor(client) {
@@ -56,4 +56,4 @@ class EightBallCommand extends BaseCommand {
   }
 }
 
-module.exports = EightBallCommand; 
+export default EightBallCommand; 

@@ -2,8 +2,8 @@
  * @fileoverview AI service for text and image analysis
  * @module services/aiService
  */
-const { GoogleGenAI } = require('@google/genai');
-const CONFIG = require('../config/config');
+import { GoogleGenAI } from '@google/genai';
+import CONFIG from '../config/config.js';
 // Initialize Google Generative AI client
 let genAI;
 try {
@@ -56,6 +56,8 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
         maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS
       }
     });
+
+    console.log('AI response:', response);
 
     if (response.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
       return CONFIG.MESSAGE.ERROR_FALLBACK;
@@ -148,7 +150,7 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
   }
 }
 
-module.exports = {
+export {
   generateTextResponse,
   generateImageResponse
 }; 

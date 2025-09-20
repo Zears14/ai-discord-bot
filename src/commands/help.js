@@ -1,6 +1,6 @@
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class HelpCommand extends BaseCommand {
   constructor(client) {
@@ -172,4 +172,4 @@ class HelpCommand extends BaseCommand {
   }
 }
 
-module.exports = HelpCommand; 
+export default HelpCommand; 

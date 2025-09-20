@@ -4,10 +4,10 @@
  * @module commands/transfer
  */
 
-const BaseCommand = require('./BaseCommand');
-const economy = require('../services/economy');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import economy from '../services/economy.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class TransferCommand extends BaseCommand {
     constructor(client) {
@@ -78,4 +78,4 @@ class TransferCommand extends BaseCommand {
     }
 }
 
-module.exports = TransferCommand;
+export default TransferCommand;

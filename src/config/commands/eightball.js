@@ -3,7 +3,7 @@
  * @module config/commands/8ball
  */
 
-module.exports = {
+export default {
   POSITIVE: [
     'It is certain 🎯',
     'It is decidedly so ✨',
@@ -70,4 +70,4 @@ module.exports = {
     'The future is not bright 🌑',
     'The answer is not positive 📉'
   ]
-}; 
+};

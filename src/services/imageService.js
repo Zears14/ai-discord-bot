@@ -3,7 +3,7 @@
  * @module services/imageService
  */
 
-const CONFIG = require('../config/config');
+import CONFIG from '../config/config.js';
 
 /**
  * Generates an image using the image generation API
@@ -49,7 +49,7 @@ async function generateImage(prompt, negative_prompt = null) {
   }
 }
 
-module.exports = {
+export {
   generateImage
 };
  

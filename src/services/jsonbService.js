@@ -3,7 +3,8 @@
  * @module services/jsonbService
  */
 
-const { Pool } = require('pg');
+import pg from 'pg';
+const { Pool } = pg;
 
 const pool = new Pool({
     connectionString: process.env.POSTGRES_URI,
@@ -160,7 +161,7 @@ async function findByKey(guildId, key, value) {
     }
 }
 
-module.exports = {
+export default{
     getData,
     setData,
     getKey,

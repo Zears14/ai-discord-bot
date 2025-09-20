@@ -1,7 +1,7 @@
-const BaseCommand = require('./BaseCommand');
-const economy = require('../services/economy');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import economy from '../services/economy.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class WagerCommand extends BaseCommand {
     constructor(client) {
@@ -193,4 +193,4 @@ class WagerCommand extends BaseCommand {
     }
 }
 
-module.exports = WagerCommand; 
+export default WagerCommand; 

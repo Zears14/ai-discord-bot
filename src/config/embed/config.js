@@ -3,9 +3,9 @@
  * @module config/embed/config
  */
 
-const { Colors } = require('discord.js');
+import { Colors } from 'discord.js';
 
-module.exports = {
+export default {
   COLORS: {
     AI_LOADING: Colors.Blue,
     AI_RESPONSE: Colors.Green,

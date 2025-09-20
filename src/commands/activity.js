@@ -1,7 +1,7 @@
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
-const historyService = require('../services/historyService');
+import BaseCommand from './BaseCommand.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
+import historyService from '../services/historyService.js';
 
 class ActivityCommand extends BaseCommand {
     constructor(client) {
@@ -76,4 +76,4 @@ class ActivityCommand extends BaseCommand {
     }
 }
 
-module.exports = ActivityCommand;
+export default ActivityCommand;

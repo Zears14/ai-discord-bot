@@ -3,7 +3,7 @@
  * @module config/economy/config
  */
 
-module.exports = {
+export default {
     // Database Settings
     DATABASE: {
         COLLECTION: 'userBalances',

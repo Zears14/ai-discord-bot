@@ -3,8 +3,8 @@
  * @module utils/errorHandler
  */
 
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class ErrorHandler {
   static async handle(error, message, command = null) {
@@ -74,8 +74,8 @@ class ErrorHandler {
   }
 }
 
-// Set up global error handlers
 process.on('uncaughtException', ErrorHandler.handleUncaughtException);
 process.on('unhandledRejection', ErrorHandler.handleUnhandledRejection);
 
-module.exports = ErrorHandler; 
+
+export default ErrorHandler;

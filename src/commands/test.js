@@ -1,9 +1,9 @@
-const BaseCommand = require('./BaseCommand');
-const economy = require('../services/economy');
-const itemsService = require('../services/itemsService');
-const inventoryService = require('../services/inventoryService');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import economy from '../services/economy.js';
+import itemsService from '../services/itemsService.js';
+import inventoryService from '../services/inventoryService.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class TestCommand extends BaseCommand {
     constructor(client) {
@@ -230,5 +230,4 @@ class TestCommand extends BaseCommand {
     }
 }
 
-// Only export if in development mode
-module.exports = process.env.IS_DEVEL === "true" ? TestCommand : null; 
+export default process.env.IS_DEVEL === "true" ? TestCommand : null; 

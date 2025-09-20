@@ -3,11 +3,11 @@
  * @module commands/ai
  */
 
-const BaseCommand = require('./BaseCommand');
-const { generateTextResponse, generateImageResponse } = require('../services/aiService');
-const { createLoadingEmbed, createResponseEmbed, createErrorEmbed, sendLongResponse } = require('../utils/embedUtils');
-const { getServerInfo } = require('../utils/serverUtils');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { generateTextResponse, generateImageResponse } from '../services/aiService.js';
+import { createLoadingEmbed, createResponseEmbed, createErrorEmbed, sendLongResponse } from '../utils/embedUtils.js';
+import { getServerInfo } from '../utils/serverUtils.js';
+import CONFIG from '../config/config.js';
 
 class AICommand extends BaseCommand {
   constructor(client) {
@@ -98,4 +98,4 @@ class AICommand extends BaseCommand {
   }
 }
 
-module.exports = AICommand; 
+export default AICommand; 

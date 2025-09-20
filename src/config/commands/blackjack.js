@@ -3,9 +3,9 @@
  * @module config/commands/blackjack
  */
 
-const { Colors } = require('discord.js');
+import { Colors } from 'discord.js';
 
-module.exports = {
+export default {
     // Card values for blackjack
     CARD_VALUES: {
         'A': 11,

@@ -3,13 +3,13 @@
  * @module config/config
  */
 
-const { Colors } = require('discord.js');
-const botConfig = require('./bot');
-const aiConfig = require('./ai');
-const embedConfig = require('./embed');
-const commandsConfig = require('./commands.config');
-const imageConfig = require('./image');
-const economyConfig = require('./economy');
+import { Colors } from 'discord.js';
+import botConfig from './bot/config.js';
+import aiConfig from './ai/config.js';
+import embedConfig from './embed/config.js';
+import commandsConfig from './commands.config.js';
+import imageConfig from './image/config.js';
+import economyConfig from './economy/config.js';
 
 /**
  * @constant {Object} CONFIG - Main configuration object
@@ -60,4 +60,4 @@ const CONFIG = {
   setServer: (server) => CONFIG.SERVER.setInstance(server)
 };
 
-module.exports = CONFIG; 
+export default CONFIG; 

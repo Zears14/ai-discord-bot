@@ -3,9 +3,9 @@
  * @module commands/roll
  */
 
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 class RollCommand extends BaseCommand {
   constructor(client) {
@@ -94,4 +94,4 @@ class RollCommand extends BaseCommand {
   }
 }
 
-module.exports = RollCommand; 
+export default RollCommand; 

@@ -3,7 +3,7 @@
  * @module config/ai/config
  */
 
-module.exports = {
+export default {
     // AI Models
     MODELS: {
         GEMMA: 'gemma-3-27b-it',

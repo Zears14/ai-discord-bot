@@ -3,8 +3,8 @@
  * @module utils/embedUtils
  */
 
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 /**
  * Creates a loading embed for AI or image generation
@@ -129,7 +129,7 @@ async function sendLongResponse(responseText, message, firstMessageEmbed) {
   }
 }
 
-module.exports = {
+export {
   createLoadingEmbed,
   createResponseEmbed,
   createErrorEmbed,

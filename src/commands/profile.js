@@ -1,9 +1,9 @@
-const BaseCommand = require('./BaseCommand');
-const economy = require('../services/economy');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
-const historyService = require('../services/historyService');
-const inventoryService = require('../services/inventoryService');
+import BaseCommand from './BaseCommand.js';
+import economy from '../services/economy.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
+import historyService from '../services/historyService.js';
+import inventoryService from '../services/inventoryService.js';
 
 class ProfileCommand extends BaseCommand {
     constructor(client) {
@@ -69,4 +69,4 @@ class ProfileCommand extends BaseCommand {
     }
 }
 
-module.exports = ProfileCommand;
+export default ProfileCommand;

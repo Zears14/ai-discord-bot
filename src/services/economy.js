@@ -3,9 +3,11 @@
  * @module services/economy
  */
 
-const { Pool } = require('pg');
-const CONFIG = require('../config/config');
-const historyService = require('./historyService');
+import pg from 'pg';
+const { Pool } = pg;
+import CONFIG from '../config/config.js';
+import historyService from './historyService.js';
+import jsonbService from './jsonbService.js';
 
 // Enhanced connection pool with better configuration
 const pool = new Pool({
@@ -686,6 +688,21 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
 }
 
 /**
+ * Get last daily timestamp from JSONB
+ */
+async function getLastDaily(userId, guildId) {
+    const lastDaily = await jsonbService.getKey(userId, guildId, 'lastDaily');
+    return lastDaily ? new Date(lastDaily) : new Date(0);
+}
+
+/**
+ * Update last daily timestamp in JSONB
+ */
+async function updateLastDaily(userId, guildId) {
+    return await jsonbService.setKey(userId, guildId, 'lastDaily', new Date().toISOString());
+}
+
+/**
  * Get economy statistics for a guild
  */
 async function getGuildStats(guildId) {
@@ -802,6 +819,10 @@ const gracefulShutdown = (signal) => {
     });
 };
 
+function getCacheStats() {
+    return { size: userCache.size, ttl: CACHE_TTL };
+}
+
 // Register shutdown handlers
 process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -818,24 +839,7 @@ process.on('unhandledRejection', (reason, promise) => {
     gracefulShutdown('unhandledRejection');
 });
 
-const jsonbService = require('./jsonbService');
-
-/**
- * Get last daily timestamp from JSONB
- */
-async function getLastDaily(userId, guildId) {
-    const lastDaily = await jsonbService.getKey(userId, guildId, 'lastDaily');
-    return lastDaily ? new Date(lastDaily) : new Date(0);
-}
-
-/**
- * Update last daily timestamp in JSONB
- */
-async function updateLastDaily(userId, guildId) {
-    return await jsonbService.setKey(userId, guildId, 'lastDaily', new Date().toISOString());
-}
-
-module.exports = {
+export default {
     // Backward compatible exports
     getBalance,
     updateBalance,
@@ -857,6 +861,6 @@ module.exports = {
     initializeDatabase,
     
     // Utility functions
-    invalidateCache: (userId, guildId) => invalidateCache(userId, guildId),
-    getCacheStats: () => ({ size: userCache.size, ttl: CACHE_TTL })
+    invalidateCache,
+    getCacheStats
 };

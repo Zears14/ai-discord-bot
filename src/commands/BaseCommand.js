@@ -3,7 +3,7 @@
  * @module commands/BaseCommand
  */
 
-const CONFIG = require('../config/config');
+import CONFIG from '../config/config.js';
 
 class BaseCommand {
   constructor(client, {
@@ -32,4 +32,4 @@ class BaseCommand {
   }
 }
 
-module.exports = BaseCommand; 
+export default BaseCommand; 

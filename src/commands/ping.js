@@ -1,5 +1,5 @@
-const BaseCommand = require('./BaseCommand');
-const CONFIG = require("../config/config");
+import BaseCommand from './BaseCommand.js';
+import CONFIG from "../config/config.js";
 
 class PingCommand extends BaseCommand {
   constructor(client) {
@@ -22,4 +22,4 @@ class PingCommand extends BaseCommand {
   }
 }
 
-module.exports = PingCommand; 
+export default PingCommand; 

@@ -3,11 +3,11 @@
  * @module index
  */
 
-require('dotenv').config();
-const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
-const CommandHandler = require('./handlers/CommandHandler');
-const ItemHandler = require('./handlers/ItemHandler');
-const CONFIG = require('./config/config');
+import 'dotenv/config';
+import { Client, GatewayIntentBits, ActivityType } from 'discord.js';
+import CommandHandler from './handlers/CommandHandler.js';
+import ItemHandler from './handlers/ItemHandler.js';
+import CONFIG from './config/config.js';
 
 // Global error handler
 process.on('unhandledRejection', (error) => {
@@ -149,7 +149,7 @@ const client = new Client({
 const commandHandler = new CommandHandler(client);
 client.commandHandler = commandHandler;
 const itemHandler = new ItemHandler();
-const inventoryService = require('./services/inventoryService');
+import inventoryService from './services/inventoryService.js';
 inventoryService.init(itemHandler);
 
 // Discord event handlers with optimized error handling

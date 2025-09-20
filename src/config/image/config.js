@@ -3,7 +3,7 @@
  * @module config/image/config
  */
 
-module.exports = {
+export default {
     // Image Output Settings
     IMAGE_OUTPUT: {
         FILENAME: 'generated_image.png',

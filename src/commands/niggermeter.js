@@ -3,9 +3,9 @@
  * @module commands/gaymeter
  */
 
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import BaseCommand from './BaseCommand.js';
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
 
 function getWhiteToBrownToBlackGradient(percentage) {
   let r, g, b;
@@ -68,4 +68,4 @@ class NiggerMeterCommand extends BaseCommand {
   }
 }
 
-module.exports = NiggerMeterCommand; 
+export default NiggerMeterCommand; 

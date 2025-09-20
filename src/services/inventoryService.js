@@ -1,7 +1,7 @@
-const { Pool } = require('pg');
-const itemsService = require('./itemsService');
-const economy = require('./economy');
-const historyService = require('./historyService');
+import pg from 'pg';
+const { Pool } = pg;
+import itemsService from './itemsService.js';
+import historyService from './historyService.js';
 
 let itemHandler;
 
@@ -102,7 +102,7 @@ async function useItem(userId, guildId, itemId, quantity = 1) {
     return itemDefinition.use(userId, guildId, quantity);
 }
 
-module.exports = {
+export default {
     init,
     getInventory,
     addItemToInventory,

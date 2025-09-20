@@ -3,11 +3,14 @@
  * @module handlers/CommandHandler
  */
 
-const { Collection } = require('discord.js');
-const fs = require('fs').promises;
-const path = require('path');
-const CONFIG = require('../config/config');
-const ErrorHandler = require('../utils/errorHandler');
+import { Collection } from 'discord.js';
+import fs from 'fs/promises';
+import { fileURLToPath } from 'url';
+import path from 'path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+import CONFIG from '../config/config.js';
+import ErrorHandler from '../utils/errorHandler.js';
 
 // Cache for command files to prevent repeated disk reads
 const commandCache = new Map();
@@ -75,7 +78,8 @@ class CommandHandler {
           if (commandCache.has(file)) {
             Command = commandCache.get(file);
           } else {
-            Command = require(path.join(commandsPath, file));
+            const commandModule = await import(path.join(commandsPath, file));
+            Command = commandModule.default;
             commandCache.set(file, Command);
           }
 
@@ -193,4 +197,4 @@ class CommandHandler {
   }
 }
 
-module.exports = CommandHandler; 
+export default CommandHandler; 
