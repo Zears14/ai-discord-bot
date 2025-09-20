@@ -161,7 +161,7 @@ async function findByKey(guildId, key, value) {
     }
 }
 
-export default{
+export default {
     getData,
     setData,
     getKey,
