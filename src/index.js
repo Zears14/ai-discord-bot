@@ -7,6 +7,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
 const express = require('express');
 const CommandHandler = require('./handlers/CommandHandler');
+const ItemHandler = require('./handlers/ItemHandler');
 const CONFIG = require('./config/config');
 
 // Global error handler
@@ -132,6 +133,9 @@ const client = new Client({
 // Initialize command handler
 const commandHandler = new CommandHandler(client);
 client.commandHandler = commandHandler;
+const itemHandler = new ItemHandler();
+const inventoryService = require('./services/inventoryService');
+inventoryService.init(itemHandler);
 
 // Discord event handlers with optimized error handling
 client.once('ready', async () => {
@@ -147,6 +151,11 @@ client.once('ready', async () => {
 
     // Load commands
     await commandHandler.loadCommands();
+
+    // Load items
+    await itemHandler.loadItems();
+    
+    console.log('Bot is ready!');
   } catch (error) {
     console.error('Error in ready event:', error);
   }

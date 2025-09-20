@@ -140,8 +140,8 @@ class WagerCommand extends BaseCommand {
                 const userWins = Math.random() > 0.5;
 
                 if (userWins) {
-                    await economy.updateBalance(userId, guildId, amount);
-                    await economy.updateBalance(targetUser.id, guildId, -amount);
+                    await economy.updateBalance(userId, guildId, amount, 'wager-win');
+                    await economy.updateBalance(targetUser.id, guildId, -amount, 'wager-loss');
 
                     const resultEmbed = new EmbedBuilder()
                         .setColor(CONFIG.COLORS.SUCCESS)
@@ -155,8 +155,8 @@ class WagerCommand extends BaseCommand {
 
                     await i.update({ embeds: [resultEmbed], components: [] });
                 } else {
-                    await economy.updateBalance(userId, guildId, -amount);
-                    await economy.updateBalance(targetUser.id, guildId, amount);
+                    await economy.updateBalance(userId, guildId, -amount, 'wager-loss');
+                    await economy.updateBalance(targetUser.id, guildId, amount, 'wager-win');
 
                     const resultEmbed = new EmbedBuilder()
                         .setColor(CONFIG.COLORS.SUCCESS)

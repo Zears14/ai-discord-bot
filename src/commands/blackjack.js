@@ -96,7 +96,7 @@ class BlackjackCommand extends BaseCommand {
         if (playerValue === 21) {
             const dealerValue = calculateHandValue(dealerHand);
             if (dealerValue === 21) {
-                await economy.updateBalance(userId, guildId, 0); // Push
+                await economy.updateBalance(userId, guildId, 0, 'blackjack-push'); // Push
                 gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH)
                     .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Blackjack! Push - your bet is returned.`)
                     .addFields(
@@ -106,7 +106,7 @@ class BlackjackCommand extends BaseCommand {
                 return message.reply({ embeds: [gameEmbed] });
             } else {
                 const winnings = Math.floor(bet * CONFIG.COMMANDS.BLACKJACK.GAME.BLACKJACK_PAYOUT);
-                await economy.updateBalance(userId, guildId, winnings);
+                await economy.updateBalance(userId, guildId, winnings, 'blackjack-win');
                 gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.WIN)
                     .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Blackjack! You win ${winnings} cm Dih!`)
                     .addFields(
@@ -151,7 +151,7 @@ class BlackjackCommand extends BaseCommand {
                 const playerValue = calculateHandValue(playerHand);
                 
                 if (playerValue > 21) {
-                    await economy.updateBalance(userId, guildId, -bet);
+                    await economy.updateBalance(userId, guildId, -bet, 'blackjack-bust');
                     gameEmbed.setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE)
                         .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${bet} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} You drew: ${formatCard(playerHand[playerHand.length - 1])}\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BUST} Bust! You lose ${bet} cm Dih.`)
                         .addFields(
@@ -187,15 +187,15 @@ class BlackjackCommand extends BaseCommand {
 
                 if (dealerValue > 21) {
                     result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Dealer busts! You win ${bet} cm Dih!`;
-                    await economy.updateBalance(userId, guildId, bet);
+                    await economy.updateBalance(userId, guildId, bet, 'blackjack-win');
                     color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
                 } else if (dealerValue > playerValue) {
                     result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.LOSE} Dealer wins! You lose ${bet} cm Dih.`;
-                    await economy.updateBalance(userId, guildId, -bet);
+                    await economy.updateBalance(userId, guildId, -bet, 'blackjack-loss');
                     color = CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE;
                 } else if (dealerValue < playerValue) {
                     result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} You win ${bet} cm Dih!`;
-                    await economy.updateBalance(userId, guildId, bet);
+                    await economy.updateBalance(userId, guildId, bet, 'blackjack-win');
                     color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
                 } else {
                     result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Push - your bet is returned.`;

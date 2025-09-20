@@ -51,7 +51,7 @@ class SlotsCommand extends BaseCommand {
 
         let finalWinnings = winnings - bet;
 
-        await economy.updateBalance(userId, guildId, finalWinnings);
+        await economy.updateBalance(userId, guildId, finalWinnings, 'slots');
         const newBalance = await economy.getBalance(userId, guildId);
 
         if (winnings > 0) {

@@ -77,7 +77,7 @@ class RouletteCommand extends BaseCommand {
         }
 
         // Update balance
-        await economy.updateBalance(userId, guildId, winnings);
+        await economy.updateBalance(userId, guildId, winnings, 'roulette');
         const newBalance = balance + winnings;
 
         // Create embed

@@ -39,7 +39,7 @@ class DailyCommand extends BaseCommand {
         }
 
         // Update balance and last daily
-        await economy.updateBalance(userId, guildId, dailyAmount);
+        await economy.updateBalance(userId, guildId, dailyAmount, 'daily');
         await economy.updateLastDaily(userId, guildId);
 
         const newBalance = await economy.getBalance(userId, guildId);

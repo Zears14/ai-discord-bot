@@ -1,5 +1,7 @@
 const BaseCommand = require('./BaseCommand');
 const economy = require('../services/economy');
+const itemsService = require('../services/itemsService');
+const inventoryService = require('../services/inventoryService');
 const { EmbedBuilder } = require('discord.js');
 const CONFIG = require('../config/config');
 
@@ -173,6 +175,38 @@ class TestCommand extends BaseCommand {
                         .setTimestamp();
 
                     await message.reply({ embeds: [resetEmbed] });
+                    break;
+                }
+
+                case 'giveitem': {
+                    if (args.length < 3) {
+                        return message.reply('Usage: `test giveitem @user <item_name> [quantity]`');
+                    }
+                    const targetUser = message.mentions.users.first();
+                    if (!targetUser) {
+                        return message.reply('Please mention a user.');
+                    }
+                    const itemName = args[2];
+                    const quantity = parseInt(args[3]) || 1;
+                    const item = await itemsService.getItemByName(itemName);
+                    if (!item) {
+                        return message.reply(`Item "${itemName}" not found.`);
+                    }
+                    await inventoryService.addItemToInventory(targetUser.id, guildId, item.id, quantity);
+                    await message.reply(`Gave ${quantity} ${item.name} to ${targetUser.username}.`);
+                    break;
+                }
+
+                case 'listitems': {
+                    const allItems = await itemsService.getAllItems();
+                    if (!allItems.length) {
+                        return message.reply('No items found.');
+                    }
+                    const embed = new EmbedBuilder()
+                        .setColor(CONFIG.COLORS.DEFAULT)
+                        .setTitle('Available Items')
+                        .setDescription(allItems.map(item => `**${item.name}** - ${item.title}`).join('\n'));
+                    await message.reply({ embeds: [embed] });
                     break;
                 }
 

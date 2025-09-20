@@ -59,7 +59,7 @@ class GrowCommand extends BaseCommand {
         }
 
         // Update balance and cooldown
-        await economy.updateBalance(userId, guildId, growth);
+        await economy.updateBalance(userId, guildId, growth, 'grow');
         await economy.updateLastGrow(userId, guildId);
 
         const newBalance = await economy.getBalance(userId, guildId);

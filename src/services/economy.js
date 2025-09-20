@@ -5,6 +5,7 @@
 
 const { Pool } = require('pg');
 const CONFIG = require('../config/config');
+const historyService = require('./historyService');
 
 // Enhanced connection pool with better configuration
 const pool = new Pool({
@@ -115,104 +116,123 @@ async function safeQuery(query, params = [], retries = 3) {
 async function initializeDatabase() {
     try {
         console.log('🔍 Checking database structure...');
-        
-        // Check if table exists and get column information
-        const tableInfo = await safeQuery(`
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name = 'economy'
-            ORDER BY ordinal_position;
-        `);
-        
-        if (tableInfo.rowCount === 0) {
-            console.log('📋 Creating economy table...');
-            try {
-                await safeQuery(`
+
+        // Use a transaction for all schema changes
+        await withTransaction(async (client) => {
+            // Check and create/update economy table
+            const economyTableInfo = await client.query(`
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = 'economy'
+                ORDER BY ordinal_position;
+            `);
+
+            if (economyTableInfo.rowCount === 0) {
+                console.log('📋 Creating economy table...');
+                await client.query(`
                     CREATE TABLE economy (
-                        userid TEXT NOT NULL CHECK (userid != ''),
-                        guildid TEXT NOT NULL CHECK (guildid != ''),
-                        balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
-                        lastgrow TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 00:00:00+00',
+                        userid TEXT NOT NULL,
+                        guildid TEXT NOT NULL,
+                        balance INTEGER NOT NULL DEFAULT 0,
+                        lastgrow TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 07:00:00+07',
+                        data JSONB DEFAULT '{}'::jsonb,
                         PRIMARY KEY (userid, guildid)
                     );
-                    
-                    CREATE INDEX IF NOT EXISTS idx_economy_guild ON economy(guildid);
-                    CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy(guildid, balance DESC);
-                    CREATE INDEX IF NOT EXISTS idx_economy_lastgrow ON economy(lastgrow) WHERE lastgrow > '1970-01-01 00:00:00+00';
                 `);
-                console.log('✅ Economy table created successfully with balance constraints');
-            } catch (createError) {
-                if (createError.code === '42501') { // Permission denied
-                    console.error('❌ Permission denied creating table. Please run this SQL as a superuser:');
-                    console.error(`
-CREATE TABLE economy (
-    userid TEXT NOT NULL CHECK (userid != ''),
-    guildid TEXT NOT NULL CHECK (guildid != ''),
-    balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
-    lastgrow TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 00:00:00+00',
-    PRIMARY KEY (userid, guildid)
-);
-
-CREATE INDEX IF NOT EXISTS idx_economy_guild ON economy(guildid);
-CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy(guildid, balance DESC);
-CREATE INDEX IF NOT EXISTS idx_economy_lastgrow ON economy(lastgrow) WHERE lastgrow > '1970-01-01 00:00:00+00';
-
--- Grant permissions to your bot user
-GRANT ALL PRIVILEGES ON TABLE economy TO your_bot_user;
-                    `);
-                    
-                    // Don't throw error, just warn and continue
-                    console.warn('⚠️  Continuing without table creation. Please create the table manually.');
-                    return false;
+                console.log('✅ Economy table created.');
+            } else {
+                console.log('✅ Economy table exists. Checking columns...');
+                // Add 'data' column if it doesn't exist
+                const hasDataColumn = economyTableInfo.rows.some(row => row.column_name === 'data');
+                if (!hasDataColumn) {
+                    console.log('🔧 Adding "data" column to economy table...');
+                    await client.query("ALTER TABLE economy ADD COLUMN data JSONB DEFAULT '{}'::jsonb;");
+                    console.log('✅ "data" column added.');
                 }
-                throw createError;
             }
-        } else {
-            console.log('✅ Economy table exists with columns:');
-            tableInfo.rows.forEach(row => {
-                console.log(`  - ${row.column_name}: ${row.data_type}`);
-            });
-            
-            // Check if balance constraint exists
-            try {
-                const constraintCheck = await safeQuery(`
-                    SELECT conname, pg_get_constraintdef(oid) as definition
-                    FROM pg_constraint 
-                    WHERE conrelid = 'economy'::regclass 
-                    AND contype = 'c'
-                    AND pg_get_constraintdef(oid) LIKE '%balance%';
-                `);
-                
-                if (constraintCheck.rowCount === 0) {
-                    console.log('🔧 Adding balance constraint...');
-                    await safeQuery(`
-                        ALTER TABLE economy 
-                        ADD CONSTRAINT chk_balance_non_negative 
-                        CHECK (balance >= 0);
-                    `);
-                    console.log('✅ Balance constraint added');
-                } else {
-                    console.log('✅ Balance constraints exist:');
-                    constraintCheck.rows.forEach(row => {
-                        console.log(`  - ${row.conname}: ${row.definition}`);
-                    });
-                }
-            } catch (constraintError) {
-                console.warn('⚠️  Could not add/check balance constraint:', constraintError.message);
+
+            // Create indexes for economy table
+            console.log('📋 Creating indexes for economy table...');
+            await client.query('CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy(guildid, balance DESC);');
+            await client.query('CREATE INDEX IF NOT EXISTS idx_economy_data_gin ON economy USING gin (data);');
+            await client.query('CREATE INDEX IF NOT EXISTS idx_economy_guild ON economy(guildid);');
+            await client.query(`CREATE INDEX IF NOT EXISTS idx_economy_lastgrow ON economy(lastgrow) WHERE lastgrow > '1970-01-01 07:00:00+07'::timestamp with time zone;`);
+            await client.query('CREATE INDEX IF NOT EXISTS idx_economy_user_guild ON economy(userid, guildid);');
+            const constraintCheck = await client.query(`
+                SELECT 1 FROM pg_constraint 
+                WHERE conname = 'chk_balance_non_negative' AND conrelid = 'economy'::regclass
+            `);
+
+            if (constraintCheck.rowCount === 0) {
+                await client.query('ALTER TABLE economy ADD CONSTRAINT chk_balance_non_negative CHECK (balance >= 0);');
             }
-        }
-        
+            console.log('✅ Indexes for economy table created.');
+
+            // Check and create items table
+            console.log('📋 Creating items table...');
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS items (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    title TEXT,
+                    type TEXT NOT NULL,
+                    price INTEGER,
+                    data JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+            `);
+            await client.query('CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);');
+            console.log('✅ Items table and index created.');
+
+            // Check and create inventory table
+            console.log('📋 Creating inventory table...');
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS inventory (
+                    userid TEXT NOT NULL,
+                    guildid TEXT NOT NULL,
+                    itemid BIGINT NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 1,
+                    meta JSONB DEFAULT '{}'::jsonb,
+                    PRIMARY KEY (userid, guildid, itemid),
+                    CONSTRAINT inventory_userid_guildid_fkey FOREIGN KEY (userid, guildid) REFERENCES economy(userid, guildid) ON DELETE CASCADE,
+                    CONSTRAINT inventory_itemid_fkey FOREIGN KEY (itemid) REFERENCES items(id) ON DELETE RESTRICT
+                );
+            `);
+            await client.query('CREATE INDEX IF NOT EXISTS idx_inventory_user_items ON inventory(userid, guildid);');
+            console.log('✅ Inventory table and index created.');
+
+            // Check and create history table
+            console.log('📋 Creating history table...');
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS history (
+                    id BIGSERIAL,
+                    userid TEXT NOT NULL,
+                    guildid TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    itemid BIGINT,
+                    amount INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (id, created_at)
+                ) PARTITION BY RANGE (created_at);
+            `);
+            await client.query('CREATE INDEX IF NOT EXISTS idx_history_user_recent ON history(userid, guildid, created_at DESC);');
+            await client.query('CREATE INDEX IF NOT EXISTS history_id_idx ON history (id);');
+            // Note: Foreign key to a partitioned table is not directly supported in all PostgreSQL versions.
+            // This might need adjustment based on the specific PostgreSQL version and partitioning strategy.
+            // await client.query('ALTER TABLE history ADD CONSTRAINT history_itemid_fkey FOREIGN KEY (itemid) REFERENCES items(id);');
+            console.log('✅ History table and indexes created.');
+        });
+
+        console.log('✅ Database structure is up to date.');
         return true;
     } catch (error) {
         console.error('❌ Database initialization failed:', error);
-        
-        // If it's a permissions error, provide helpful guidance
-        if (error.code === '42501') {
-            console.error('🔧 Fix: Run as database superuser or create table manually');
+        if (error.code === '42P07') { // relation "..." already exists
+            console.warn('⚠️  One or more tables or indexes already exist. This is likely not an issue.');
+        } else if (error.code === '42501') {
+            console.error('🔧 Fix: Ensure the bot has sufficient permissions (CREATE, ALTER, INDEX) on the database.');
         }
-        
-        // Don't throw error to prevent bot from crashing
-        console.warn('⚠️  Bot will continue, but database operations may fail');
+        console.warn('⚠️  Bot will continue, but database operations may fail.');
         return false;
     }
 }
@@ -379,6 +399,14 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
             // Log transaction for audit trail
             console.log(`Balance update: ${userId}:${guildId} ${amount > 0 ? '+' : ''}${amount} = ${newBalance} (${reason})`);
 
+            // Add to history
+            await historyService.addHistory({
+                userid: userId,
+                guildid: guildId,
+                type: reason,
+                amount: amount
+            });
+
             // Invalidate cache
             invalidateCache(userId, guildId);
 
@@ -456,6 +484,13 @@ async function updateLastGrow(userId, guildId, customDate = null) {
         // Invalidate cache
         invalidateCache(userId, guildId);
 
+        // Add to history
+        await historyService.addHistory({
+            userid: userId,
+            guildid: guildId,
+            type: 'grow'
+        });
+
         console.log(`Updated grow time for ${userId}:${guildId} to ${newDate.toISOString()}`);
         
         return {
@@ -493,6 +528,14 @@ async function setBalance(userId, guildId, amount) {
 
         // Invalidate cache
         invalidateCache(userId, guildId);
+
+        // Add to history
+        await historyService.addHistory({
+            userid: userId,
+            guildid: guildId,
+            type: 'set-balance',
+            amount: finalAmount
+        });
 
         console.log(`Set balance for ${userId}:${guildId} to ${finalAmount}`);
         return res.rows[0].balance;
@@ -616,6 +659,20 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
         // Invalidate caches
         invalidateCache(fromUserId, guildId);
         invalidateCache(toUserId, guildId);
+
+        // Add to history
+        await historyService.addHistory({
+            userid: fromUserId,
+            guildid: guildId,
+            type: 'transfer-out',
+            amount: -amount
+        });
+        await historyService.addHistory({
+            userid: toUserId,
+            guildid: guildId,
+            type: 'transfer-in',
+            amount: amount
+        });
 
         console.log(`Transfer: ${fromUserId} -> ${toUserId} (${guildId}): ${amount} (${reason})`);
 
