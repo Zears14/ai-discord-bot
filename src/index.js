@@ -138,7 +138,7 @@ const inventoryService = require('./services/inventoryService');
 inventoryService.init(itemHandler);
 
 // Discord event handlers with optimized error handling
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   try {
     console.log(`Logged in as ${client.user.tag}!`);
     console.log(`Bot is in ${client.guilds.cache.size} guilds`);
