@@ -34,6 +34,43 @@ class SlotsCommand extends BaseCommand {
         const reel2 = reels[Math.floor(Math.random() * reels.length)];
         const reel3 = reels[Math.floor(Math.random() * reels.length)];
 
+        // Create initial embed with empty slots
+        const initialEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Slot Machine 🎰')
+            .setDescription('```\n[ ❓ | ❓ | ❓ ]\n```')
+            .setTimestamp();
+
+        const msg = await message.reply({ embeds: [initialEmbed] });
+
+        // First reel animation
+        await new Promise(resolve => setTimeout(resolve, 700));
+        const firstReelEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Slot Machine 🎰')
+            .setDescription(`\`\`\`\n[ ${reel1} | ❓ | ❓ ]\n\`\`\``)
+            .setTimestamp();
+        await msg.edit({ embeds: [firstReelEmbed] });
+
+        // Second reel animation
+        await new Promise(resolve => setTimeout(resolve, 700));
+        const secondReelEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Slot Machine 🎰')
+            .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ❓ ]\n\`\`\``)
+            .setTimestamp();
+        await msg.edit({ embeds: [secondReelEmbed] });
+
+        // Third reel animation with suspense pause
+        await new Promise(resolve => setTimeout(resolve, 900));
+        const thirdReelEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Slot Machine 🎰')
+            .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
+            .setTimestamp();
+        await msg.edit({ embeds: [thirdReelEmbed] });
+
+        // Calculate winnings
         let winnings = 0;
         let resultMessage = `You lost ${bet} cm Dih.`;
 
@@ -58,17 +95,20 @@ class SlotsCommand extends BaseCommand {
             resultMessage = `You won ${winnings} cm Dih!`
         }
 
-        const embed = new EmbedBuilder()
+        // Brief pause before showing result
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        const finalEmbed = new EmbedBuilder()
             .setColor(winnings > 0 ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
             .setTitle('🎰 Slot Machine 🎰')
-            .setDescription(`[ ${reel1} | ${reel2} | ${reel3} ]`)
+            .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
             .addFields(
                 { name: 'Result', value: resultMessage, inline: true },
                 { name: 'New Balance', value: `${newBalance} cm`, inline: true }
             )
             .setTimestamp();
 
-        await message.reply({ embeds: [embed] });
+        await msg.edit({ embeds: [finalEmbed] });
     }
 }
 

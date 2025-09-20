@@ -54,9 +54,41 @@ class RouletteCommand extends BaseCommand {
             return message.reply('Invalid bet type. Please choose from: `red`, `black`, `even`, `odd`, or a number from 0-36.');
         }
 
-        // Spin the wheel
+        // Create initial spinning animation embed with loading bar
+        const spinEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Roulette Wheel')
+            .setDescription('```\n[=         ] Spinning...\n```')
+            .setTimestamp();
+
+        const spinMsg = await message.reply({ embeds: [spinEmbed] });
+
+        // Determine result early but don't show it
         const winningNumber = ROULETTE_NUMBERS[Math.floor(Math.random() * ROULETTE_NUMBERS.length)];
         const winningColor = RED_NUMBERS.includes(winningNumber) ? 'red' : (BLACK_NUMBERS.includes(winningNumber) ? 'black' : 'green');
+
+        // Wait for "spin" with just two message updates
+        await new Promise(resolve => setTimeout(resolve, 700));
+        
+        // Update with progress
+        const midEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Roulette Wheel')
+            .setDescription('```\n[=====     ] Still spinning...\n```')
+            .setTimestamp();
+        await spinMsg.edit({ embeds: [midEmbed] });
+
+        await new Promise(resolve => setTimeout(resolve, 700));
+
+        // Show final spin with click effect
+        const finalSpinEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🎰 Roulette Wheel')
+            .setDescription('```\n[=========] *Click*\n```')
+            .setTimestamp();
+        await spinMsg.edit({ embeds: [finalSpinEmbed] });
+
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         let winnings = -amount;
         let resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You lost ${amount} cm Dih.`;
@@ -91,8 +123,10 @@ class RouletteCommand extends BaseCommand {
             )
             .setTimestamp();
 
-        return message.reply({ embeds: [embed] });
+        // Edit the spinning message with the final result
+        return spinMsg.edit({ embeds: [embed] });
     }
 }
+
 
 module.exports = RouletteCommand;
