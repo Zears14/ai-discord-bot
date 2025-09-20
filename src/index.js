@@ -5,7 +5,6 @@
 
 require('dotenv').config();
 const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
-const express = require('express');
 const CommandHandler = require('./handlers/CommandHandler');
 const ItemHandler = require('./handlers/ItemHandler');
 const CONFIG = require('./config/config');
@@ -22,7 +21,7 @@ process.on('uncaughtException', (error) => {
 });
 
 // Memory leak detection
-const memoryUsageThreshold = 1024 * 1024 * 512; // 512MB
+const memoryUsageThreshold = 1024 * 1024 * 1024 * 2; // 2GB
 setInterval(() => {
   const memoryUsage = process.memoryUsage();
   if (memoryUsage.heapUsed > memoryUsageThreshold) {
@@ -45,73 +44,89 @@ function validateEnvironment() {
 }
 
 /**
- * Sets up the health check server with optimized settings
- * @returns {Promise<http.Server>} Express server instance
+ * Sets up the health check server using Bun's native HTTP server
+ * @returns {Promise<Server>} Bun server instance
  */
 function setupHealthServer() {
-  const app = express();
   const port = CONFIG.SERVER.PORT;
-
-  // Optimize Express settings
-  app.disable('x-powered-by');
-  app.enable('trust proxy');
-  app.set('etag', 'strong');
-
-  // Health check endpoint with caching
-  app.get('/', (req, res) => {
-    res.set('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
-    res.send(CONFIG.SERVER.HEALTH_MESSAGE);
-  });
-
-  // Health status endpoint with detailed metrics
-  app.get('/health', (req, res) => {
-    const healthData = {
-      status: 'ok',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-      memory: process.memoryUsage(),
-      cpu: process.cpuUsage()
-    };
-    res.status(200).json(healthData);
-  });
-
-  // Stats endpoint with rate limiting
   const statsCache = new Map();
   const CACHE_DURATION = 60000; // 1 minute
 
-  app.get('/stats', (req, res) => {
-    const now = Date.now();
-    const cachedStats = statsCache.get('stats');
-    
-    if (cachedStats && now - cachedStats.timestamp < CACHE_DURATION) {
-      return res.status(200).json(cachedStats.data);
-    }
+  return new Promise((resolve) => {
+    const server = Bun.serve({
+      port: port,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const headers = {
+          "Server": "Dih Bot Health Server",
+        };
 
-    const stats = {
-      guilds: client.guilds.cache.size,
-      users: client.users.cache.size,
-      memory: process.memoryUsage(),
-      timestamp: now
-    };
+        // Root health check endpoint
+        if (url.pathname === "/") {
+          headers["Cache-Control"] = "public, max-age=300";
+          return new Response(CONFIG.SERVER.HEALTH_MESSAGE, { 
+            headers 
+          });
+        }
 
-    statsCache.set('stats', { data: stats, timestamp: now });
-    res.status(200).json(stats);
-  });
+        // Detailed health status endpoint
+        if (url.pathname === "/health") {
+          const healthData = {
+            status: "ok",
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString(),
+            memory: process.memoryUsage(),
+            cpu: process.cpuUsage()
+          };
+          
+          return Response.json(healthData, { 
+            headers 
+          });
+        }
 
-  return new Promise((resolve, reject) => {
-    const server = app.listen(port, () => {
-      console.log(`Health check server listening on port ${port}`);
-      resolve(server);
+        // Stats endpoint with caching
+        if (url.pathname === "/stats") {
+          const now = Date.now();
+          const cachedStats = statsCache.get("stats");
+          
+          if (cachedStats && now - cachedStats.timestamp < CACHE_DURATION) {
+            return Response.json(cachedStats.data, { 
+              headers 
+            });
+          }
+
+          const stats = {
+            guilds: client.guilds.cache.size,
+            users: client.users.cache.size,
+            memory: process.memoryUsage(),
+            timestamp: now
+          };
+
+          statsCache.set("stats", { data: stats, timestamp: now });
+          return Response.json(stats, { 
+            headers 
+          });
+        }
+
+        // 404 for unknown routes
+        return new Response("Not Found", { 
+          status: 404, 
+          headers 
+        });
+      },
+      error(error) {
+        console.error("Health server error:", error);
+        return new Response("Internal Server Error", { 
+          status: 500,
+          headers: {
+            "Server": "Dih Bot Health Server"
+          }
+        });
+      }
     });
 
-    server.on('error', (error) => {
-      console.error(`Failed to start health check server: ${error.message}`);
-      reject(error);
-    });
-
-    // Optimize server settings
-    server.keepAliveTimeout = 65000; // Slightly higher than default 60s
-    server.headersTimeout = 66000; // Slightly higher than keepAliveTimeout
+    console.log(`Health check server listening on port ${port}`);
+    resolve(server);
   });
 }
 
