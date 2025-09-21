@@ -278,6 +278,79 @@ process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 process.on('SIGQUIT', cleanup);
 
+
+/**
+ * Transfer balance from one user to another
+ * @param {string} fromUserId - Discord user ID of the sender
+ * @param {string} toUserId - Discord user ID of the receiver
+ * @param {string} guildId - Discord guild ID
+ * @param {number} amount - Amount to transfer
+ * @returns {Promise<boolean>} Whether the transfer was successful
+ */
+async function transferBalance(fromUserId, toUserId, guildId, amount) {
+    if (amount <= 0) {
+        throw new Error('Transfer amount must be positive.');
+    }
+
+    try {
+        const db = await connectDB();
+        const collection = db.collection(CONFIG.DATABASE.COLLECTION);
+
+        const fromUser = await collection.findOne({ userId: fromUserId, guildId });
+
+        if (!fromUser || fromUser.balance < amount) {
+            throw new Error('Insufficient balance.');
+        }
+
+        // Use a session for transaction
+        const session = client.startSession();
+
+        try {
+            await session.withTransaction(async () => {
+                // Decrement sender's balance
+                await collection.updateOne(
+                    { userId: fromUserId, guildId },
+                    { $inc: { balance: -amount } },
+                    { session }
+                );
+
+                // Increment receiver's balance
+                const toUser = await collection.findOne({ userId: toUserId, guildId });
+                if (!toUser) {
+                    await collection.insertOne(
+                        { 
+                            userId: toUserId, 
+                            guildId, 
+                            balance: CONFIG.DATABASE.DEFAULT_BALANCE + amount, 
+                            lastGrow: new Date(0) 
+                        },
+                        { session }
+                    );
+                } else {
+                    await collection.updateOne(
+                        { userId: toUserId, guildId },
+                        { $inc: { balance: amount } },
+                        { session }
+                    );
+                }
+            });
+            return true;
+        } catch (error) {
+            console.error('Transaction failed:', error);
+            throw new Error('Transfer failed. Please try again later.');
+        } finally {
+            session.endSession();
+        }
+    } catch (error) {
+        console.error('Error transferring balance:', error);
+        // Re-throw specific errors
+        if (error.message === 'Insufficient balance.' || error.message === 'Transfer amount must be positive.') {
+            throw error;
+        }
+        throw new Error('Failed to transfer balance. Please try again later.');
+    }
+}
+
 module.exports = {
     getBalance,
     updateBalance,
@@ -286,5 +359,6 @@ module.exports = {
     updateLastGrow,
     setBalance,
     cleanup,
-    getTopUsers
+    getTopUsers,
+    transferBalance
 }; 
