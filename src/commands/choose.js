@@ -3,8 +3,8 @@
  * @module commands/choose
  */
 
-import BaseCommand from './BaseCommand.js';
 import { EmbedBuilder } from 'discord.js';
+import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 
 class ChooseCommand extends BaseCommand {
@@ -15,18 +15,23 @@ class ChooseCommand extends BaseCommand {
       category: 'Fun',
       usage: 'choose <option1> | <option2> [| option3...]',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
-      aliases: ['pick', 'decide']
+      aliases: ['pick', 'decide'],
     });
   }
 
   async execute(message, args) {
     const input = args.join(' ');
-    
+
     if (!input) {
-      return message.reply('Please provide some options to choose from! Use | to separate them.\nExample: `$choose pizza | burger | pasta`');
+      return message.reply(
+        'Please provide some options to choose from! Use | to separate them.\nExample: `$choose pizza | burger | pasta`'
+      );
     }
 
-    const options = input.split('|').map(opt => opt.trim()).filter(opt => opt.length > 0);
+    const options = input
+      .split('|')
+      .map((opt) => opt.trim())
+      .filter((opt) => opt.length > 0);
 
     if (options.length < 2) {
       return message.reply('Please provide at least 2 options to choose from!');
@@ -44,14 +49,15 @@ class ChooseCommand extends BaseCommand {
       .setColor(CONFIG.COLORS.DEFAULT)
       .setTitle('🤔 Decision Maker')
       .setDescription(`I choose: **${choice}** ${randomEmoji}`)
-      .addFields(
-        { name: 'Options', value: options.map((opt, i) => `${i + 1}. ${opt}`).join('\n') }
-      )
-      .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .addFields({ name: 'Options', value: options.map((opt, i) => `${i + 1}. ${opt}`).join('\n') })
+      .setFooter({
+        text: `Requested by ${message.author.tag}`,
+        iconURL: message.author.displayAvatarURL(),
+      })
       .setTimestamp();
 
     await message.reply({ embeds: [embed] });
   }
 }
 
-export default ChooseCommand; 
+export default ChooseCommand;

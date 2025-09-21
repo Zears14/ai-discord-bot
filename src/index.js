@@ -4,12 +4,14 @@
  */
 
 import 'dotenv/config';
+// eslint-disable-next-line import/no-unresolved
+import Bun from 'bun'; // Using Bun's native HTTP server
 import { Client, GatewayIntentBits, ActivityType } from 'discord.js';
+import CONFIG from './config/config.js';
 import CommandHandler from './handlers/CommandHandler.js';
 import ItemHandler from './handlers/ItemHandler.js';
+import inventoryService from './services/inventoryService.js';
 import logger from './services/loggerService.js';
-import CONFIG from './config/config.js';
-
 // Global error handler
 process.on('unhandledRejection', (error) => {
   logger.discord.error('Unhandled promise rejection:', error);
@@ -36,8 +38,15 @@ setInterval(() => {
  * @throws {Error} If required environment variables are missing
  */
 function validateEnvironment() {
-  const requiredEnvVars = ['DISCORD_TOKEN', 'GOOGLE_API_KEY', 'POSTGRES_URI', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'];
-  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+  const requiredEnvVars = [
+    'DISCORD_TOKEN',
+    'GOOGLE_API_KEY',
+    'POSTGRES_URI',
+    'CLOUDFLARE_ACCOUNT_ID',
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_ACCOUNT_ID',
+  ];
+  const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);
 
   if (missingVars.length > 0) {
     throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
@@ -59,40 +68,40 @@ function setupHealthServer() {
       async fetch(req) {
         const url = new URL(req.url);
         const headers = {
-          "Server": "Dih Bot Health Server",
+          Server: 'Dih Bot Health Server',
         };
 
         // Root health check endpoint
-        if (url.pathname === "/") {
-          headers["Cache-Control"] = "public, max-age=300";
-          return new Response(CONFIG.SERVER.HEALTH_MESSAGE, { 
-            headers 
+        if (url.pathname === '/') {
+          headers['Cache-Control'] = 'public, max-age=300';
+          return new Response(CONFIG.SERVER.HEALTH_MESSAGE, {
+            headers,
           });
         }
 
         // Detailed health status endpoint
-        if (url.pathname === "/health") {
+        if (url.pathname === '/health') {
           const healthData = {
-            status: "ok",
+            status: 'ok',
             uptime: process.uptime(),
             timestamp: new Date().toISOString(),
             memory: process.memoryUsage(),
-            cpu: process.cpuUsage()
+            cpu: process.cpuUsage(),
           };
-          
-          return Response.json(healthData, { 
-            headers 
+
+          return Response.json(healthData, {
+            headers,
           });
         }
 
         // Stats endpoint with caching
-        if (url.pathname === "/stats") {
+        if (url.pathname === '/stats') {
           const now = Date.now();
-          const cachedStats = statsCache.get("stats");
-          
+          const cachedStats = statsCache.get('stats');
+
           if (cachedStats && now - cachedStats.timestamp < CACHE_DURATION) {
-            return Response.json(cachedStats.data, { 
-              headers 
+            return Response.json(cachedStats.data, {
+              headers,
             });
           }
 
@@ -100,30 +109,30 @@ function setupHealthServer() {
             guilds: client.guilds.cache.size,
             users: client.users.cache.size,
             memory: process.memoryUsage(),
-            timestamp: now
+            timestamp: now,
           };
 
-          statsCache.set("stats", { data: stats, timestamp: now });
-          return Response.json(stats, { 
-            headers 
+          statsCache.set('stats', { data: stats, timestamp: now });
+          return Response.json(stats, {
+            headers,
           });
         }
 
         // 404 for unknown routes
-        return new Response("Not Found", { 
-          status: 404, 
-          headers 
+        return new Response('Not Found', {
+          status: 404,
+          headers,
         });
       },
       error(error) {
-        logger.error("Health server error:", error);
-        return new Response("Internal Server Error", { 
+        logger.error('Health server error:', error);
+        return new Response('Internal Server Error', {
           status: 500,
           headers: {
-            "Server": "Dih Bot Health Server"
-          }
+            Server: 'Dih Bot Health Server',
+          },
         });
-      }
+      },
     });
 
     logger.info(`Health check server listening on port ${port}`);
@@ -137,20 +146,19 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildPresences
+    GatewayIntentBits.GuildPresences,
   ],
   failIfNotExists: false,
   allowedMentions: { parse: ['users'] },
   restTimeOffset: 0,
   restRequestTimeout: 30000,
-  retryLimit: 3
+  retryLimit: 3,
 });
 
 // Initialize command handler
 const commandHandler = new CommandHandler(client);
 client.commandHandler = commandHandler;
 const itemHandler = new ItemHandler();
-import inventoryService from './services/inventoryService.js';
 inventoryService.init(itemHandler);
 
 // Discord event handlers with optimized error handling
@@ -160,9 +168,9 @@ client.once('clientReady', async () => {
     logger.discord.ready(`Bot is in ${client.guilds.cache.size} guilds`);
 
     // Set status with optimized activity
-    await client.user.setActivity('$help for commands', { 
+    await client.user.setActivity('$help for commands', {
       type: ActivityType.Listening,
-      shardId: client.shard?.id
+      shardId: client.shard?.id,
     });
 
     // Load commands
@@ -170,7 +178,7 @@ client.once('clientReady', async () => {
 
     // Load items
     await itemHandler.loadItems();
-    
+
     logger.discord.ready('Bot is ready!');
   } catch (error) {
     logger.discord.error('Error in ready event:', error);
@@ -204,7 +212,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // Enhanced error handling for Discord events
-client.on('error', error => {
+client.on('error', (error) => {
   logger.discord.error('Discord client error:', error);
   // Attempt to recover from error
   if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
@@ -212,7 +220,7 @@ client.on('error', error => {
   }
 });
 
-client.on('warn', warning => {
+client.on('warn', (warning) => {
   logger.warn('Discord client warning:', warning);
 });
 
@@ -233,17 +241,17 @@ client.on('reconnecting', () => {
  */
 async function gracefulShutdown() {
   logger.discord.disconnect('Initiating graceful shutdown...');
-  
+
   try {
     // Close Discord connection
     await client.destroy();
-    
+
     // Close health server
     const server = CONFIG.getServer();
     if (server) {
       await new Promise((resolve) => server.close(resolve));
     }
-    
+
     logger.discord.disconnect('Graceful shutdown complete');
     process.exit(0);
   } catch (error) {
@@ -276,7 +284,7 @@ async function startBot() {
         retries--;
         if (retries === 0) throw error;
         logger.warn(`Login failed, retrying... (${retries} attempts remaining)`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
     logger.discord.ready('Bot startup complete!');

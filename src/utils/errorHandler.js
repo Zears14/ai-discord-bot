@@ -16,7 +16,10 @@ class ErrorHandler {
       .setColor(CONFIG.COLORS.ERROR)
       .setTitle('❌ Error')
       .setDescription(this.getErrorMessage(error))
-      .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .setFooter({
+        text: `Requested by ${message.author.tag}`,
+        iconURL: message.author.displayAvatarURL(),
+      })
       .setTimestamp();
 
     try {
@@ -36,11 +39,11 @@ class ErrorHandler {
     if (error.name === 'DiscordAPIError') {
       switch (error.code) {
         case 50013:
-          return 'I don\'t have permission to do that!';
+          return "I don't have permission to do that!";
         case 50001:
-          return 'I can\'t access that channel!';
+          return "I can't access that channel!";
         case 50005:
-          return 'I can\'t send messages in that channel!';
+          return "I can't send messages in that channel!";
         default:
           return `Discord API Error: ${error.message}`;
       }
@@ -77,6 +80,5 @@ class ErrorHandler {
 
 process.on('uncaughtException', ErrorHandler.handleUncaughtException);
 process.on('unhandledRejection', ErrorHandler.handleUnhandledRejection);
-
 
 export default ErrorHandler;

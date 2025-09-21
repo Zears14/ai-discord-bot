@@ -3,7 +3,7 @@ import logger from './loggerService.js';
 const { Pool } = pg;
 
 const pool = new Pool({
-    connectionString: process.env.POSTGRES_URI,
+  connectionString: process.env.POSTGRES_URI,
 });
 
 /**
@@ -18,18 +18,18 @@ const pool = new Pool({
  * @returns {Promise<void>}
  */
 async function addHistory(entry) {
-    const { userid, guildid, type, itemid, amount } = entry;
-    const query = `
+  const { userid, guildid, type, itemid, amount } = entry;
+  const query = `
         INSERT INTO history (userid, guildid, type, itemid, amount)
         VALUES ($1, $2, $3, $4, $5)
     `;
-    const values = [userid, guildid, type, itemid || null, amount || 0];
-    try {
-        await pool.query(query, values);
-    } catch (error) {
-        logger.discord.dbError('Error adding history:', error);
-        throw error;
-    }
+  const values = [userid, guildid, type, itemid || null, amount || 0];
+  try {
+    await pool.query(query, values);
+  } catch (error) {
+    logger.discord.dbError('Error adding history:', error);
+    throw error;
+  }
 }
 
 /**
@@ -41,7 +41,7 @@ async function addHistory(entry) {
  * @returns {Promise<Array>} Array of activity entries.
  */
 async function getUserActivity(userid, guildid, limit = 10) {
-    const query = `
+  const query = `
         SELECT h.*, i.name as item_name, i.title as item_title
         FROM history h
         LEFT JOIN items i ON h.itemid = i.id
@@ -49,14 +49,14 @@ async function getUserActivity(userid, guildid, limit = 10) {
         ORDER BY h.created_at DESC
         LIMIT $3
     `;
-    const values = [userid, guildid, limit];
-    try {
-        const result = await pool.query(query, values);
-        return result.rows;
-    } catch (error) {
-        logger.discord.dbError('Error fetching user activity:', error);
-        throw error;
-    }
+  const values = [userid, guildid, limit];
+  try {
+    const result = await pool.query(query, values);
+    return result.rows;
+  } catch (error) {
+    logger.discord.dbError('Error fetching user activity:', error);
+    throw error;
+  }
 }
 
 /**
@@ -67,7 +67,7 @@ async function getUserActivity(userid, guildid, limit = 10) {
  * @returns {Promise<Object>} User statistics.
  */
 async function getUserStats(userid, guildid) {
-    const query = `
+  const query = `
         SELECT 
             COUNT(*) FILTER (WHERE type IN ('slots', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'roulette')) as games_played,
             COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN ('slots', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'roulette')), 0) as total_gambled,
@@ -80,14 +80,14 @@ async function getUserStats(userid, guildid) {
         FROM history
         WHERE userid = $1 AND guildid = $2
     `;
-    const values = [userid, guildid];
-    try {
-        const result = await pool.query(query, values);
-        return result.rows[0];
-    } catch (error) {
-        logger.discord.dbError('Error fetching user stats:', error);
-        throw error;
-    }
+  const values = [userid, guildid];
+  try {
+    const result = await pool.query(query, values);
+    return result.rows[0];
+  } catch (error) {
+    logger.discord.dbError('Error fetching user stats:', error);
+    throw error;
+  }
 }
 
 /**
@@ -97,7 +97,7 @@ async function getUserStats(userid, guildid) {
  * @returns {Promise<Object>} Guild statistics.
  */
 async function getGuildStats(guildid) {
-    const query = `
+  const query = `
         SELECT 
             COUNT(DISTINCT userid) as active_users,
             COUNT(*) FILTER (WHERE type IN ('slots', 'blackjack', 'blackjack-loss', 'blackjack-push', 'roulette')) as total_games,
@@ -113,14 +113,14 @@ async function getGuildStats(guildid) {
         WHERE guildid = $1
         AND created_at >= NOW() - INTERVAL '30 days'
     `;
-    const values = [guildid];
-    try {
-        const result = await pool.query(query, values);
-        return result.rows[0];
-    } catch (error) {
-        logger.discord.dbError('Error fetching guild stats:', error);
-        throw error;
-    }
+  const values = [guildid];
+  try {
+    const result = await pool.query(query, values);
+    return result.rows[0];
+  } catch (error) {
+    logger.discord.dbError('Error fetching guild stats:', error);
+    throw error;
+  }
 }
 
 /**
@@ -137,50 +137,50 @@ async function getGuildStats(guildid) {
  * @returns {Promise<Array>} Matching history entries.
  */
 async function searchHistory(criteria) {
-    const conditions = [];
-    const values = [];
-    let paramIndex = 1;
+  const conditions = [];
+  const values = [];
+  let paramIndex = 1;
 
-    if (criteria.userid) {
-        conditions.push(`userid = $${paramIndex}`);
-        values.push(criteria.userid);
-        paramIndex++;
-    }
+  if (criteria.userid) {
+    conditions.push(`userid = $${paramIndex}`);
+    values.push(criteria.userid);
+    paramIndex++;
+  }
 
-    if (criteria.guildid) {
-        conditions.push(`guildid = $${paramIndex}`);
-        values.push(criteria.guildid);
-        paramIndex++;
-    }
+  if (criteria.guildid) {
+    conditions.push(`guildid = $${paramIndex}`);
+    values.push(criteria.guildid);
+    paramIndex++;
+  }
 
-    if (criteria.type) {
-        conditions.push(`type = $${paramIndex}`);
-        values.push(criteria.type);
-        paramIndex++;
-    }
+  if (criteria.type) {
+    conditions.push(`type = $${paramIndex}`);
+    values.push(criteria.type);
+    paramIndex++;
+  }
 
-    if (criteria.itemid) {
-        conditions.push(`itemid = $${paramIndex}`);
-        values.push(criteria.itemid);
-        paramIndex++;
-    }
+  if (criteria.itemid) {
+    conditions.push(`itemid = $${paramIndex}`);
+    values.push(criteria.itemid);
+    paramIndex++;
+  }
 
-    if (criteria.dateFrom) {
-        conditions.push(`created_at >= $${paramIndex}`);
-        values.push(criteria.dateFrom);
-        paramIndex++;
-    }
+  if (criteria.dateFrom) {
+    conditions.push(`created_at >= $${paramIndex}`);
+    values.push(criteria.dateFrom);
+    paramIndex++;
+  }
 
-    if (criteria.dateTo) {
-        conditions.push(`created_at <= $${paramIndex}`);
-        values.push(criteria.dateTo);
-        paramIndex++;
-    }
+  if (criteria.dateTo) {
+    conditions.push(`created_at <= $${paramIndex}`);
+    values.push(criteria.dateTo);
+    paramIndex++;
+  }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limit = criteria.limit || 50;
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = criteria.limit || 50;
 
-    const query = `
+  const query = `
         SELECT h.*, i.name as item_name, i.title as item_title
         FROM history h
         LEFT JOIN items i ON h.itemid = i.id
@@ -188,21 +188,21 @@ async function searchHistory(criteria) {
         ORDER BY h.created_at DESC
         LIMIT $${paramIndex}
     `;
-    values.push(limit);
+  values.push(limit);
 
-    try {
-        const result = await pool.query(query, values);
-        return result.rows;
-    } catch (error) {
-        logger.discord.dbError('Error searching history:', error);
-        throw error;
-    }
+  try {
+    const result = await pool.query(query, values);
+    return result.rows;
+  } catch (error) {
+    logger.discord.dbError('Error searching history:', error);
+    throw error;
+  }
 }
 
-export default{
-    addHistory,
-    getUserActivity,
-    getUserStats,
-    getGuildStats,
-    searchHistory
+export default {
+  addHistory,
+  getUserActivity,
+  getUserStats,
+  getGuildStats,
+  searchHistory,
 };

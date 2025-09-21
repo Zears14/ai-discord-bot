@@ -4,11 +4,16 @@
  */
 
 import BaseCommand from './BaseCommand.js';
-import logger from '../services/loggerService.js';
-import { generateTextResponse, generateImageResponse } from '../services/aiService.js';
-import { createLoadingEmbed, createResponseEmbed, createErrorEmbed, sendLongResponse } from '../utils/embedUtils.js';
-import { getServerInfo } from '../utils/serverUtils.js';
 import CONFIG from '../config/config.js';
+import { generateTextResponse, generateImageResponse } from '../services/aiService.js';
+import logger from '../services/loggerService.js';
+import {
+  createLoadingEmbed,
+  createResponseEmbed,
+  createErrorEmbed,
+  sendLongResponse,
+} from '../utils/embedUtils.js';
+import { getServerInfo } from '../utils/serverUtils.js';
 
 class AICommand extends BaseCommand {
   constructor(client) {
@@ -18,7 +23,7 @@ class AICommand extends BaseCommand {
       category: 'AI',
       usage: 'ai <query> or attach an image',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.AI,
-      aliases: ['ask', 'question']
+      aliases: ['ask', 'question'],
     });
   }
 
@@ -28,8 +33,8 @@ class AICommand extends BaseCommand {
     // Fetch conversation history
     const messages = await message.channel.messages.fetch({ limit: 51 });
     const history = messages
-      .filter(m => m.id !== message.id && (!m.author.bot || m.author.id === this.client.user.id))
-      .map(m => {
+      .filter((m) => m.id !== message.id && (!m.author.bot || m.author.id === this.client.user.id))
+      .map((m) => {
         if (m.author.id === this.client.user.id && m.embeds.length > 0) {
           const embed = m.embeds[0];
           return `${m.author.username}: ${embed.description || ''}`;
@@ -51,15 +56,16 @@ class AICommand extends BaseCommand {
     }
 
     if (!query && message.attachments.size === 0) {
-      return message.reply(CONFIG.EMBED.EMPTY_QUERY)
-        .catch(err => logger.discord.error(`Failed to send empty query message: ${err.message}`));
+      return message
+        .reply(CONFIG.EMBED.EMPTY_QUERY)
+        .catch((err) => logger.discord.error(`Failed to send empty query message: ${err.message}`));
     }
 
     let loadingMessage;
 
     try {
       loadingMessage = await message.reply({
-        embeds: [createLoadingEmbed('ai', message, this.client)]
+        embeds: [createLoadingEmbed('ai', message, this.client)],
       });
 
       const serverInfo = await getServerInfo(message);
@@ -87,16 +93,20 @@ class AICommand extends BaseCommand {
     } catch (error) {
       logger.discord.cmdError('AI command error:', error);
       if (loadingMessage) {
-        await loadingMessage.edit({
-          embeds: [createErrorEmbed('ai', error, message, this.client)]
-        }).catch(err => logger.discord.error(`Failed to update loading message: ${err.message}`));
+        await loadingMessage
+          .edit({
+            embeds: [createErrorEmbed('ai', error, message, this.client)],
+          })
+          .catch((err) => logger.discord.error(`Failed to update loading message: ${err.message}`));
       } else {
-        await message.reply({
-          embeds: [createErrorEmbed('ai', error, message, this.client)]
-        }).catch(err => logger.discord.error(`Failed to send error message: ${err.message}`));
+        await message
+          .reply({
+            embeds: [createErrorEmbed('ai', error, message, this.client)],
+          })
+          .catch((err) => logger.discord.error(`Failed to send error message: ${err.message}`));
       }
     }
   }
 }
 
-export default AICommand; 
+export default AICommand;

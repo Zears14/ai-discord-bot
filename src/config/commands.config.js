@@ -26,4 +26,4 @@ const loadCommandConfigs = async () => {
 
 await loadCommandConfigs();
 
-export default commandConfigs; 
+export default commandConfigs;

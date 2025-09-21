@@ -3,14 +3,14 @@
  * @module handlers/CommandHandler
  */
 
-import { Collection } from 'discord.js';
 import fs from 'fs/promises';
-import { fileURLToPath } from 'url';
-import logger from '../services/loggerService.js';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { Collection } from 'discord.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import CONFIG from '../config/config.js';
+import logger from '../services/loggerService.js';
 import ErrorHandler from '../utils/errorHandler.js';
 
 // Cache for command files to prevent repeated disk reads
@@ -31,10 +31,10 @@ class CommandHandler {
     this.aliases = new Collection();
     this.categories = new Set();
     this.cooldowns = new Collection();
-    
+
     // WeakMap for storing command metadata to allow garbage collection
     this.commandMetadata = new WeakMap();
-    
+
     // Initialize command cache cleanup interval
     this._initCacheCleanup();
   }
@@ -70,58 +70,62 @@ class CommandHandler {
       const commandFiles = await fs.readdir(commandsPath);
 
       // Process commands in parallel for better performance
-      await Promise.all(commandFiles.map(async (file) => {
-        if (!file.endsWith('.js') || file === 'BaseCommand.js') return;
+      await Promise.all(
+        commandFiles.map(async (file) => {
+          if (!file.endsWith('.js') || file === 'BaseCommand.js') return;
 
-        try {
-          // Check cache first
-          let Command;
-          if (commandCache.has(file)) {
-            Command = commandCache.get(file);
-          } else {
-            const commandModule = await import(path.join(commandsPath, file));
-            Command = commandModule.default;
-            commandCache.set(file, Command);
-          }
+          try {
+            // Check cache first
+            let Command;
+            if (commandCache.has(file)) {
+              Command = commandCache.get(file);
+            } else {
+              const commandModule = await import(path.join(commandsPath, file));
+              Command = commandModule.default;
+              commandCache.set(file, Command);
+            }
 
-          // Skip if command is null (e.g., disabled in development mode)
-          if (!Command) {
-            return;
-          }
+            // Skip if command is null (e.g., disabled in development mode)
+            if (!Command) {
+              return;
+            }
 
-          const command = new Command(this.client);
+            const command = new Command(this.client);
 
-          if (!command.name) {
-            logger.discord.cmdError(`Command in ${file} is missing a name`);
-            return;
-          }
+            if (!command.name) {
+              logger.discord.cmdError(`Command in ${file} is missing a name`);
+              return;
+            }
 
-          // Store command metadata in WeakMap
-          this.commandMetadata.set(command, {
-            file,
-            loadTime: Date.now()
-          });
-
-          this.commands.set(command.name, command);
-          this.categories.add(command.category);
-
-          // Register aliases using a more efficient approach
-          if (command.aliases?.length) {
-            command.aliases.forEach(alias => {
-              this.aliases.set(alias, command.name);
+            // Store command metadata in WeakMap
+            this.commandMetadata.set(command, {
+              file,
+              loadTime: Date.now(),
             });
-          }
 
-          logger.discord.command(`Loaded command: ${command.name} (${command.category})`);
-        } catch (error) {
-          // Only log errors for non-null commands
-          if (error.message !== 'Command is not a constructor') {
-            logger.discord.cmdError(`Failed to load command ${file}:`, error);
-          }
-        }
-      }));
+            this.commands.set(command.name, command);
+            this.categories.add(command.category);
 
-      logger.discord.command(`Loaded ${this.commands.size} commands in ${this.categories.size} categories`);
+            // Register aliases using a more efficient approach
+            if (command.aliases?.length) {
+              command.aliases.forEach((alias) => {
+                this.aliases.set(alias, command.name);
+              });
+            }
+
+            logger.discord.command(`Loaded command: ${command.name} (${command.category})`);
+          } catch (error) {
+            // Only log errors for non-null commands
+            if (error.message !== 'Command is not a constructor') {
+              logger.discord.cmdError(`Failed to load command ${file}:`, error);
+            }
+          }
+        })
+      );
+
+      logger.discord.command(
+        `Loaded ${this.commands.size} commands in ${this.categories.size} categories`
+      );
     } catch (error) {
       logger.discord.cmdError('Error loading commands:', error);
       throw error;
@@ -139,8 +143,10 @@ class CommandHandler {
     const cooldownAmount = (command.cooldown || CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
 
     // Use Map's get-or-set pattern for better performance
-    const timestamps = this.cooldowns.get(command.name) || this.cooldowns.set(command.name, new Collection()).get(command.name);
-    
+    const timestamps =
+      this.cooldowns.get(command.name) ||
+      this.cooldowns.set(command.name, new Collection()).get(command.name);
+
     const expirationTime = timestamps.get(userId);
     if (expirationTime && now < expirationTime) {
       return (expirationTime - now) / 1000;
@@ -168,7 +174,8 @@ class CommandHandler {
     const commandName = args.shift().toLowerCase();
 
     // Use Map's get-or-set pattern for better performance
-    const command = this.commands.get(commandName) || this.commands.get(this.aliases.get(commandName));
+    const command =
+      this.commands.get(commandName) || this.commands.get(this.aliases.get(commandName));
     if (!command) return;
 
     if (!command.enabled) {
@@ -178,16 +185,20 @@ class CommandHandler {
     // Check permissions using Set for O(1) lookup
     if (command.permissions?.length) {
       const userPerms = new Set(message.member.permissions.toArray());
-      const missingPermissions = command.permissions.filter(perm => !userPerms.has(perm));
+      const missingPermissions = command.permissions.filter((perm) => !userPerms.has(perm));
       if (missingPermissions.length) {
-        return message.reply(`You need the following permissions to use this command: ${missingPermissions.join(', ')}`);
+        return message.reply(
+          `You need the following permissions to use this command: ${missingPermissions.join(', ')}`
+        );
       }
     }
 
     // Check cooldown
     const cooldownTime = this.checkCooldown(message.author.id, command);
     if (cooldownTime > 0) {
-      return message.reply(`Please wait ${cooldownTime.toFixed(1)} more second(s) before using the \`${command.name}\` command.`);
+      return message.reply(
+        `Please wait ${cooldownTime.toFixed(1)} more second(s) before using the \`${command.name}\` command.`
+      );
     }
 
     try {
@@ -198,4 +209,4 @@ class CommandHandler {
   }
 }
 
-export default CommandHandler; 
+export default CommandHandler;

@@ -13,7 +13,7 @@ export default {
     ERROR: Colors.Red,
     DEFAULT: Colors.Blurple,
     SUCCESS: Colors.Green,
-    ULTRA_GROWTH: Colors.Gold
+    ULTRA_GROWTH: Colors.Gold,
   },
   EMBED: {
     AI_TITLE: 'Zears AI H',
@@ -22,6 +22,6 @@ export default {
     ERROR_AI: 'Ts is having no.',
     ERROR_IMAGE_PREFIX: 'Failed to generate image. Error: ',
     EMPTY_QUERY: 'What am i supposed to do nga?',
-    EMPTY_IMAGE_PROMPT: 'What do you want me to generate nga?'
-  }
-}; 
+    EMPTY_IMAGE_PROMPT: 'What do you want me to generate nga?',
+  },
+};

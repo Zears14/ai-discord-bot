@@ -6,16 +6,19 @@
 import CONFIG from '../config/config.js';
 
 class BaseCommand {
-  constructor(client, {
-    name = null,
-    description = 'No description provided.',
-    category = 'Miscellaneous',
-    usage = 'No usage provided.',
-    enabled = true,
-    cooldown = CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
-    aliases = [],
-    permissions = []
-  }) {
+  constructor(
+    client,
+    {
+      name = null,
+      description = 'No description provided.',
+      category = 'Miscellaneous',
+      usage = 'No usage provided.',
+      enabled = true,
+      cooldown = CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
+      aliases = [],
+      permissions = [],
+    }
+  ) {
     this.client = client;
     this.name = name;
     this.description = description;
@@ -27,9 +30,12 @@ class BaseCommand {
     this.permissions = permissions;
   }
 
-  async execute(message, args) {
-    throw new Error(`${this.name} doesn't have an execute method!`);
+  /**
+   * @abstract
+   */
+  execute(_message, _args) {
+    throw new Error('Command not implemented');
   }
 }
 
-export default BaseCommand; 
+export default BaseCommand;

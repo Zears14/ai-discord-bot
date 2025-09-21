@@ -4,8 +4,8 @@
  */
 
 export default {
-  DEFAULT: 5,  // Default cooldown in seconds
-  AI: 20,      // AI command cooldown in seconds
-  IMAGE: 60,   // Image generation cooldown in seconds
-  ECONOMY: 20
-}; 
+  DEFAULT: 5, // Default cooldown in seconds
+  AI: 20, // AI command cooldown in seconds
+  IMAGE: 60, // Image generation cooldown in seconds
+  ECONOMY: 20,
+};

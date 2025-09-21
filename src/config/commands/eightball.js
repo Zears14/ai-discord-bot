@@ -24,7 +24,7 @@ export default {
     'The answer is crystal clear - yes! 💎',
     'The universe says yes! 🌌',
     'All signs point to success! 🎯',
-    'The future looks bright! ☀️'
+    'The future looks bright! ☀️',
   ],
   NEUTRAL: [
     'Reply hazy, try again 🌫️',
@@ -46,10 +46,10 @@ export default {
     'The situation is still developing 🌱',
     'The answer is in flux 🌊',
     'The future is not yet written 📝',
-    'The answer is still forming 🎨'
+    'The answer is still forming 🎨',
   ],
   NEGATIVE: [
-    'Don\'t count on it ❌',
+    "Don't count on it ❌",
     'My reply is no 🚫',
     'My sources say no 📵',
     'Outlook not so good 👎',
@@ -68,6 +68,6 @@ export default {
     'The situation is not ideal 🎭',
     'The outcome is not guaranteed 🎲',
     'The future is not bright 🌑',
-    'The answer is not positive 📉'
-  ]
+    'The answer is not positive 📉',
+  ],
 };
