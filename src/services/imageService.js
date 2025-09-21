@@ -2,8 +2,7 @@
  * @fileoverview Image generation service
  * @module services/imageService
  */
-
-import CONFIG from '../config/config.js';
+import logger from './loggerService.js';
 
 /**
  * Generates an image using the image generation API
@@ -44,7 +43,7 @@ async function generateImage(prompt, negative_prompt = null) {
     return Buffer.from(imageBuffer);
 
   } catch (error) {
-    console.error('Error generating image with Cloudflare AI:', error);
+    logger.discord.apiError('Error generating image with Cloudflare AI:', error);
     throw new Error(`Image generation failed: ${error.message || 'Unknown error'}`);
   }
 }

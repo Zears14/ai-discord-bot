@@ -6,6 +6,7 @@
 import { Collection } from 'discord.js';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
+import logger from '../services/loggerService.js';
 import path from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,7 +92,7 @@ class CommandHandler {
           const command = new Command(this.client);
 
           if (!command.name) {
-            console.warn(`Command in ${file} is missing a name`);
+            logger.discord.cmdError(`Command in ${file} is missing a name`);
             return;
           }
 
@@ -111,18 +112,18 @@ class CommandHandler {
             });
           }
 
-          console.log(`Loaded command: ${command.name} (${command.category})`);
+          logger.discord.command(`Loaded command: ${command.name} (${command.category})`);
         } catch (error) {
           // Only log errors for non-null commands
           if (error.message !== 'Command is not a constructor') {
-            console.error(`Failed to load command ${file}:`, error);
+            logger.discord.cmdError(`Failed to load command ${file}:`, error);
           }
         }
       }));
 
-      console.log(`Loaded ${this.commands.size} commands in ${this.categories.size} categories`);
+      logger.discord.command(`Loaded ${this.commands.size} commands in ${this.categories.size} categories`);
     } catch (error) {
-      console.error('Error loading commands:', error);
+      logger.discord.cmdError('Error loading commands:', error);
       throw error;
     }
   }

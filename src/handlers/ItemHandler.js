@@ -1,5 +1,6 @@
 import { Collection } from 'discord.js';
 import fs from 'fs/promises';
+import logger from '../services/loggerService.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import itemsService from '../services/itemsService.js';
@@ -35,10 +36,10 @@ class ItemHandler {
                     const dbItem = dbItemMap.get(item.name);
                     if (!dbItem) {
                         await itemsService.createItem(item);
-                        console.log(`Loaded and created item: ${item.name}`);
+                        logger.discord.db(`Loaded and created item: ${item.name}`);
                     }
                 } catch (error) {
-                    console.error(`Failed to load item ${file}:`, error);
+                    logger.discord.cmdError(`Failed to load item ${file}:`, error);
                 }
             }
 
@@ -47,9 +48,9 @@ class ItemHandler {
 
         } catch (error) {
             if (error.code === 'ENOENT') {
-                console.warn('No items directory found. Skipping item loading.');
+                logger.warn('No items directory found. Skipping item loading.');
             } else {
-                console.error('Error loading items:', error);
+                logger.discord.cmdError('Error loading items:', error);
             }
         }
     }
@@ -59,12 +60,12 @@ class ItemHandler {
             if (!existingItemNames.has(dbItem.name)) {
                 try {
                     await itemsService.deleteItem(dbItem.id);
-                    console.log(`Removed orphaned item from database: ${dbItem.name} (ID: ${dbItem.id})`);
+                    logger.discord.db(`Removed orphaned item from database: ${dbItem.name} (ID: ${dbItem.id})`);
                 } catch (error) {
                     if (error.code === '23503') { // Foreign key violation
-                        console.warn(`Could not remove item ${dbItem.name} (ID: ${dbItem.id}) as it is referenced in inventory`);
+                        logger.warn(`Could not remove item ${dbItem.name} (ID: ${dbItem.id}) as it is referenced in inventory`);
                     } else {
-                        console.error(`Error removing orphaned item ${dbItem.name}:`, error);
+                        logger.discord.dbError(`Error removing orphaned item ${dbItem.name}:`, error);
                     }
                 }
             }

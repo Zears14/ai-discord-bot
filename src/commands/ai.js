@@ -4,6 +4,7 @@
  */
 
 import BaseCommand from './BaseCommand.js';
+import logger from '../services/loggerService.js';
 import { generateTextResponse, generateImageResponse } from '../services/aiService.js';
 import { createLoadingEmbed, createResponseEmbed, createErrorEmbed, sendLongResponse } from '../utils/embedUtils.js';
 import { getServerInfo } from '../utils/serverUtils.js';
@@ -45,13 +46,13 @@ class AICommand extends BaseCommand {
         const repliedTo = await message.channel.messages.fetch(message.reference.messageId);
         query = `(in reply to ${repliedTo.author.username}: "${repliedTo.content}") ${query}`;
       } catch (err) {
-        console.warn('Failed to fetch replied to message:', err);
+        logger.warn('Failed to fetch replied to message:', err);
       }
     }
 
     if (!query && message.attachments.size === 0) {
       return message.reply(CONFIG.EMBED.EMPTY_QUERY)
-        .catch(err => console.error(`Failed to send empty query message: ${err.message}`));
+        .catch(err => logger.discord.error(`Failed to send empty query message: ${err.message}`));
     }
 
     let loadingMessage;
@@ -84,15 +85,15 @@ class AICommand extends BaseCommand {
       const responseEmbed = createResponseEmbed(aiResponse, message, this.client);
       await sendLongResponse(aiResponse, loadingMessage, responseEmbed);
     } catch (error) {
-      console.error('AI command error:', error);
+      logger.discord.cmdError('AI command error:', error);
       if (loadingMessage) {
         await loadingMessage.edit({
           embeds: [createErrorEmbed('ai', error, message, this.client)]
-        }).catch(err => console.error(`Failed to update loading message: ${err.message}`));
+        }).catch(err => logger.discord.error(`Failed to update loading message: ${err.message}`));
       } else {
         await message.reply({
           embeds: [createErrorEmbed('ai', error, message, this.client)]
-        }).catch(err => console.error(`Failed to send error message: ${err.message}`));
+        }).catch(err => logger.discord.error(`Failed to send error message: ${err.message}`));
       }
     }
   }

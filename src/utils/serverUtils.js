@@ -2,6 +2,7 @@
  * @fileoverview Utility functions for server information
  * @module utils/serverUtils
  */
+import logger from '../services/loggerService.js';
 
 /**
  * Gets server information for AI context
@@ -30,9 +31,9 @@ async function getServerInfo(message) {
         try {
           // Try to fetch more members, but don't fail if it doesn't work
           await message.guild.members.fetch({ limit: 100 })
-            .catch(err => console.warn(`Couldn't fetch members: ${err.message}`));
+            .catch(err => logger.warn(`Couldn't fetch members: ${err.message}`));
         } catch (err) {
-          console.warn(`Error fetching guild members: ${err.message}`);
+          logger.warn(`Error fetching guild members: ${err.message}`);
         }
       }
 
@@ -45,14 +46,14 @@ async function getServerInfo(message) {
         .slice(0, 20); // Limit to avoid huge messages
 
     } catch (err) {
-      console.warn(`Error processing guild members: ${err.message}`);
+      logger.warn(`Error processing guild members: ${err.message}`);
       memberCount = message.guild.memberCount; // Fallback
       onlineMemberUsernames = [message.author.username]; // Fallback
     }
 
     return [message.author.username, serverName, memberCount, onlineMemberUsernames];
   } catch (error) {
-    console.error('Error getting server info:', error);
+    logger.discord.error('Error getting server info:', error);
     // Fallback to minimal info in case of errors
     return [message.author.username, 'Unknown Server', 1, [message.author.username]];
   }

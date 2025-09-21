@@ -5,6 +5,7 @@
  */
 
 import BaseCommand from './BaseCommand.js';
+import logger from '../services/loggerService.js';
 import economy from '../services/economy.js';
 import { EmbedBuilder } from 'discord.js';
 import CONFIG from '../config/config.js';
@@ -68,7 +69,7 @@ class TransferCommand extends BaseCommand {
             return message.reply({ embeds: [embed] });
 
         } catch (error) {
-            console.error('Transfer error:', error);
+            logger.discord.cmdError('Transfer error:', error);
             if (error.message.startsWith('Insufficient balance')) {
                 const balance = await economy.getBalance(fromUserId, guildId);
                 return message.reply(`You don't have enough Dih! Your balance: ${balance} cm`);

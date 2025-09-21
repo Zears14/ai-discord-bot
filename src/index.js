@@ -7,15 +7,16 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits, ActivityType } from 'discord.js';
 import CommandHandler from './handlers/CommandHandler.js';
 import ItemHandler from './handlers/ItemHandler.js';
+import logger from './services/loggerService.js';
 import CONFIG from './config/config.js';
 
 // Global error handler
 process.on('unhandledRejection', (error) => {
-  console.error('Unhandled promise rejection:', error);
+  logger.discord.error('Unhandled promise rejection:', error);
 });
 
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught exception:', error);
+  logger.discord.error('Uncaught exception:', error);
   // Attempt graceful shutdown
   gracefulShutdown();
 });
@@ -25,7 +26,7 @@ const memoryUsageThreshold = 1024 * 1024 * 1024 * 2; // 2GB
 setInterval(() => {
   const memoryUsage = process.memoryUsage();
   if (memoryUsage.heapUsed > memoryUsageThreshold) {
-    console.warn('High memory usage detected:', memoryUsage);
+    logger.warn('High memory usage detected:', memoryUsage);
     global.gc && global.gc(); // Trigger garbage collection if --expose-gc flag is set
   }
 }, 300000); // Check every 5 minutes
@@ -115,7 +116,7 @@ function setupHealthServer() {
         });
       },
       error(error) {
-        console.error("Health server error:", error);
+        logger.error("Health server error:", error);
         return new Response("Internal Server Error", { 
           status: 500,
           headers: {
@@ -125,7 +126,7 @@ function setupHealthServer() {
       }
     });
 
-    console.log(`Health check server listening on port ${port}`);
+    logger.info(`Health check server listening on port ${port}`);
     resolve(server);
   });
 }
@@ -155,8 +156,8 @@ inventoryService.init(itemHandler);
 // Discord event handlers with optimized error handling
 client.once('clientReady', async () => {
   try {
-    console.log(`Logged in as ${client.user.tag}!`);
-    console.log(`Bot is in ${client.guilds.cache.size} guilds`);
+    logger.discord.ready(`Logged in as ${client.user.tag}!`);
+    logger.discord.ready(`Bot is in ${client.guilds.cache.size} guilds`);
 
     // Set status with optimized activity
     await client.user.setActivity('$help for commands', { 
@@ -170,9 +171,9 @@ client.once('clientReady', async () => {
     // Load items
     await itemHandler.loadItems();
     
-    console.log('Bot is ready!');
+    logger.discord.ready('Bot is ready!');
   } catch (error) {
-    console.error('Error in ready event:', error);
+    logger.discord.error('Error in ready event:', error);
   }
 });
 
@@ -195,7 +196,7 @@ client.on('messageCreate', async (message) => {
     try {
       await commandHandler.handleMessage(message);
     } catch (error) {
-      console.error('Error handling message:', error);
+      logger.discord.cmdError('Error handling message:', error);
     }
   }, MESSAGE_QUEUE_TIMEOUT);
 
@@ -204,7 +205,7 @@ client.on('messageCreate', async (message) => {
 
 // Enhanced error handling for Discord events
 client.on('error', error => {
-  console.error('Discord client error:', error);
+  logger.discord.error('Discord client error:', error);
   // Attempt to recover from error
   if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
     client.ws.reconnect();
@@ -212,11 +213,11 @@ client.on('error', error => {
 });
 
 client.on('warn', warning => {
-  console.warn('Discord client warning:', warning);
+  logger.warn('Discord client warning:', warning);
 });
 
 client.on('disconnect', () => {
-  console.warn('Bot disconnected from Discord!');
+  logger.discord.disconnect('Bot disconnected from Discord!');
   // Attempt to reconnect
   setTimeout(() => {
     client.ws.reconnect();
@@ -224,14 +225,14 @@ client.on('disconnect', () => {
 });
 
 client.on('reconnecting', () => {
-  console.log('Bot reconnecting to Discord...');
+  logger.discord.connect('Bot reconnecting to Discord...');
 });
 
 /**
  * Graceful shutdown function
  */
 async function gracefulShutdown() {
-  console.log('Initiating graceful shutdown...');
+  logger.discord.disconnect('Initiating graceful shutdown...');
   
   try {
     // Close Discord connection
@@ -243,10 +244,10 @@ async function gracefulShutdown() {
       await new Promise((resolve) => server.close(resolve));
     }
     
-    console.log('Graceful shutdown complete');
+    logger.discord.disconnect('Graceful shutdown complete');
     process.exit(0);
   } catch (error) {
-    console.error('Error during graceful shutdown:', error);
+    logger.discord.error('Error during graceful shutdown:', error);
     process.exit(1);
   }
 }
@@ -269,18 +270,18 @@ async function startBot() {
     while (retries > 0) {
       try {
         await client.login(process.env.DISCORD_TOKEN);
-        console.log('Logged in to Discord!');
+        logger.discord.connect('Logged in to Discord!');
         break;
       } catch (error) {
         retries--;
         if (retries === 0) throw error;
-        console.warn(`Login failed, retrying... (${retries} attempts remaining)`);
+        logger.warn(`Login failed, retrying... (${retries} attempts remaining)`);
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
     }
-    console.log('Bot startup complete!');
+    logger.discord.ready('Bot startup complete!');
   } catch (error) {
-    console.error('Critical startup error:', error);
+    logger.discord.error('Critical startup error:', error);
     process.exit(1);
   }
 }

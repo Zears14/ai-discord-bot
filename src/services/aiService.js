@@ -4,12 +4,13 @@
  */
 import { GoogleGenAI } from '@google/genai';
 import CONFIG from '../config/config.js';
+import logger from './loggerService.js';
 // Initialize Google Generative AI client
 let genAI;
 try {
   genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 } catch (error) {
-  console.error('Failed to initialize Google Generative AI client:', error);
+  logger.discord.apiError('Failed to initialize Google Generative AI client:', error);
   process.exit(1);
 }
 
@@ -57,7 +58,7 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
       }
     });
 
-    console.log('AI response:', response);
+    logger.discord.api('AI response:', response);
 
     if (response.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
       return CONFIG.MESSAGE.ERROR_FALLBACK;
@@ -65,7 +66,7 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
 
     return response.text;
   } catch (error) {
-    console.error('Error generating text response:', error);
+    logger.discord.apiError('Error generating text response:', error);
     if (error.message?.includes("safety") ||
       error.message?.includes("blocked") ||
       error.message?.includes("policy")) {
@@ -107,7 +108,7 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
       } catch (error) {
         clearTimeout(timeoutId);
         if (retries > 0) {
-          console.log(`Retrying image fetch (${retries} attempts left)`);
+          logger.discord.api(`Retrying image fetch (${retries} attempts left)`);
           return fetchWithTimeout(url, options, retries - 1, timeout);
         }
         throw error;
@@ -145,7 +146,7 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
 
     return response.text;
   } catch (error) {
-    console.error('Error generating image response:', error);
+    logger.discord.apiError('Error generating image response:', error);
     throw new Error(`Image analysis error: ${error.message || 'Unknown error'}`);
   }
 }

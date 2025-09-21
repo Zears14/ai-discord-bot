@@ -1,5 +1,6 @@
 import BaseCommand from './BaseCommand.js';
 import economy from '../services/economy.js';
+import logger from '../services/loggerService.js';
 import { EmbedBuilder } from 'discord.js';
 import CONFIG from '../config/config.js';
 
@@ -48,7 +49,7 @@ class LeaderboardCommand extends BaseCommand {
 
             await message.reply({ embeds: [embed] });
         } catch (error) {
-            console.error('Error in leaderboard command:', error);
+            logger.discord.cmdError('Error in leaderboard command:', error);
             const errorEmbed = new EmbedBuilder()
                 .setColor(CONFIG.COLORS.ERROR)
                 .setTitle('❌ Error')

@@ -1,5 +1,6 @@
 import BaseCommand from './BaseCommand.js';
 import { EmbedBuilder } from 'discord.js';
+import logger from '../services/loggerService.js';
 import CONFIG from '../config/config.js';
 import historyService from '../services/historyService.js';
 
@@ -66,7 +67,7 @@ class ActivityCommand extends BaseCommand {
             await message.reply({ embeds: [activityEmbed] });
 
         } catch (error) {
-            console.error('Error fetching activity:', error);
+            logger.discord.cmdError('Error fetching activity:', error);
             const errorEmbed = new EmbedBuilder()
                 .setColor(CONFIG.COLORS.ERROR)
                 .setTitle('❌ Error')

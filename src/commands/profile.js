@@ -1,5 +1,6 @@
 import BaseCommand from './BaseCommand.js';
 import economy from '../services/economy.js';
+import logger from '../services/loggerService.js';
 import { EmbedBuilder } from 'discord.js';
 import CONFIG from '../config/config.js';
 import historyService from '../services/historyService.js';
@@ -59,7 +60,7 @@ class ProfileCommand extends BaseCommand {
             await message.reply({ embeds: [profileEmbed] });
 
         } catch (error) {
-            console.error('Error fetching profile:', error);
+            logger.discord.cmdError('Error fetching profile:', error);
             const errorEmbed = new EmbedBuilder()
                 .setColor(CONFIG.COLORS.ERROR)
                 .setTitle('❌ Error')

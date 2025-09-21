@@ -5,6 +5,7 @@
 
 import { EmbedBuilder } from 'discord.js';
 import CONFIG from '../config/config.js';
+import logger from '../services/loggerService.js';
 
 /**
  * Creates a loading embed for AI or image generation
@@ -124,7 +125,7 @@ async function sendLongResponse(responseText, message, firstMessageEmbed) {
       }
     }
   } catch (error) {
-    console.error('Error sending long response:', error);
+    logger.discord.error('Error sending long response:', error);
     throw new Error('Failed to send complete response');
   }
 }

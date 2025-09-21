@@ -4,6 +4,7 @@
  */
 
 import BaseCommand from './BaseCommand.js';
+import logger from '../services/loggerService.js';
 import { AttachmentBuilder } from 'discord.js';
 import { generateImage } from '../services/imageService.js';
 import { createLoadingEmbed, createErrorEmbed } from '../utils/embedUtils.js';
@@ -25,14 +26,14 @@ class ImageGenCommand extends BaseCommand {
     const fullPrompt = args.join(' ');
     if (!fullPrompt) {
       return message.reply(CONFIG.EMBED.EMPTY_IMAGE_PROMPT)
-        .catch(err => console.error(`Failed to send empty prompt message: ${err.message}`));
+        .catch(err => logger.discord.error(`Failed to send empty prompt message: ${err.message}`));
     }
 
     const [prompt, negative_prompt] = fullPrompt.split('|').map(s => s.trim());
 
     if (!prompt) {
       return message.reply(CONFIG.EMBED.EMPTY_IMAGE_PROMPT)
-        .catch(err => console.error(`Failed to send empty prompt message: ${err.message}`));
+        .catch(err => logger.discord.error(`Failed to send empty prompt message: ${err.message}`));
     }
 
     let loadingMessage;
@@ -47,7 +48,7 @@ class ImageGenCommand extends BaseCommand {
 
       // Try to delete loading message but continue if it fails
       await loadingMessage.delete().catch(err => {
-        console.warn(`Failed to delete loading message: ${err.message}`);
+        logger.warn(`Failed to delete loading message: ${err.message}`);
       });
 
       await message.channel.send({
@@ -55,15 +56,15 @@ class ImageGenCommand extends BaseCommand {
         files: [attachment]
       });
     } catch (error) {
-      console.error('Image generation command error:', error);
+      logger.discord.cmdError('Image generation command error:', error);
       if (loadingMessage) {
         await loadingMessage.edit({
           embeds: [createErrorEmbed('image', error, message, this.client)]
-        }).catch(err => console.error(`Failed to update loading message: ${err.message}`));
+        }).catch(err => logger.discord.error(`Failed to update loading message: ${err.message}`));
       } else {
         await message.reply({
           embeds: [createErrorEmbed('image', error, message, this.client)]
-        }).catch(err => console.error(`Failed to send error message: ${err.message}`));
+        }).catch(err => logger.discord.error(`Failed to send error message: ${err.message}`));
       }
     }
   }

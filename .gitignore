@@ -2,4 +2,6 @@
 node_modules/*
 *.bak*
 .idea/*
+logs/
+*.log
 GEMINI.md

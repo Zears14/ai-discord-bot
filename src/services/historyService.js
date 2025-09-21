@@ -1,4 +1,5 @@
 import pg from 'pg';
+import logger from './loggerService.js';
 const { Pool } = pg;
 
 const pool = new Pool({
@@ -26,7 +27,7 @@ async function addHistory(entry) {
     try {
         await pool.query(query, values);
     } catch (error) {
-        console.error('Error adding history:', error);
+        logger.discord.dbError('Error adding history:', error);
         throw error;
     }
 }
@@ -53,7 +54,7 @@ async function getUserActivity(userid, guildid, limit = 10) {
         const result = await pool.query(query, values);
         return result.rows;
     } catch (error) {
-        console.error('Error fetching user activity:', error);
+        logger.discord.dbError('Error fetching user activity:', error);
         throw error;
     }
 }
@@ -84,7 +85,7 @@ async function getUserStats(userid, guildid) {
         const result = await pool.query(query, values);
         return result.rows[0];
     } catch (error) {
-        console.error('Error fetching user stats:', error);
+        logger.discord.dbError('Error fetching user stats:', error);
         throw error;
     }
 }
@@ -117,7 +118,7 @@ async function getGuildStats(guildid) {
         const result = await pool.query(query, values);
         return result.rows[0];
     } catch (error) {
-        console.error('Error fetching guild stats:', error);
+        logger.discord.dbError('Error fetching guild stats:', error);
         throw error;
     }
 }
@@ -193,7 +194,7 @@ async function searchHistory(criteria) {
         const result = await pool.query(query, values);
         return result.rows;
     } catch (error) {
-        console.error('Error searching history:', error);
+        logger.discord.dbError('Error searching history:', error);
         throw error;
     }
 }

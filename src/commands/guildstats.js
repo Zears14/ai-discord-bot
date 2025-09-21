@@ -1,4 +1,5 @@
 import BaseCommand from './BaseCommand.js';
+import logger from '../services/loggerService.js';
 import economy from '../services/economy.js';
 import historyService from '../services/historyService.js';
 import { EmbedBuilder } from 'discord.js';
@@ -70,7 +71,7 @@ class GuildStatsCommand extends BaseCommand {
             await message.reply({ embeds: [statsEmbed] });
 
         } catch (error) {
-            console.error('Error fetching guild stats:', error);
+            logger.discord.cmdError('Error fetching guild stats:', error);
             const errorEmbed = new EmbedBuilder()
                 .setColor(CONFIG.COLORS.ERROR)
                 .setTitle('❌ Error')

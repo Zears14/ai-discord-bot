@@ -7,6 +7,7 @@ import pg from 'pg';
 const { Pool } = pg;
 import CONFIG from '../config/config.js';
 import historyService from './historyService.js';
+import logger from './loggerService.js';
 import jsonbService from './jsonbService.js';
 
 // Enhanced connection pool with better configuration
@@ -25,11 +26,11 @@ const pool = new Pool({
 
 // Connection pool event handlers
 pool.on('connect', (client) => {
-    console.log('New postgres client connected');
+    logger.discord.db('New postgres client connected');
 });
 
 pool.on('error', (err) => {
-    console.error('Postgres pool error:', err);
+    logger.discord.dbError('Postgres pool error:', err);
 });
 
 // Cache for frequently accessed data
@@ -81,7 +82,7 @@ async function withTransaction(callback) {
         return result;
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error('Transaction failed:', error);
+        logger.discord.dbError('Transaction failed:', error);
         throw error;
     } finally {
         client.release();
@@ -102,7 +103,7 @@ async function safeQuery(query, params = [], retries = 3) {
                 client.release();
             }
         } catch (error) {
-            console.error(`Query attempt ${attempt} failed:`, error.message);
+            logger.discord.dbError(`Query attempt ${attempt} failed:`, error.message);
             
             if (attempt === retries) throw error;
             
@@ -117,7 +118,7 @@ async function safeQuery(query, params = [], retries = 3) {
  */
 async function initializeDatabase() {
     try {
-        console.log('🔍 Checking database structure...');
+        logger.discord.db('🔍 Checking database structure...');
 
         // Use a transaction for all schema changes
         await withTransaction(async (client) => {
@@ -130,7 +131,7 @@ async function initializeDatabase() {
             `);
 
             if (economyTableInfo.rowCount === 0) {
-                console.log('📋 Creating economy table...');
+                logger.discord.db('📋 Creating economy table...');
                 await client.query(`
                     CREATE TABLE economy (
                         userid TEXT NOT NULL,
@@ -141,20 +142,20 @@ async function initializeDatabase() {
                         PRIMARY KEY (userid, guildid)
                     );
                 `);
-                console.log('✅ Economy table created.');
+                logger.discord.db('✅ Economy table created.');
             } else {
-                console.log('✅ Economy table exists. Checking columns...');
+                logger.discord.db('✅ Economy table exists. Checking columns...');
                 // Add 'data' column if it doesn't exist
                 const hasDataColumn = economyTableInfo.rows.some(row => row.column_name === 'data');
                 if (!hasDataColumn) {
-                    console.log('🔧 Adding "data" column to economy table...');
+                    logger.discord.db('🔧 Adding "data" column to economy table...');
                     await client.query("ALTER TABLE economy ADD COLUMN data JSONB DEFAULT '{}'::jsonb;");
-                    console.log('✅ "data" column added.');
+                    logger.discord.db('✅ "data" column added.');
                 }
             }
 
             // Create indexes for economy table
-            console.log('📋 Creating indexes for economy table...');
+            logger.discord.db('📋 Creating indexes for economy table...');
             await client.query('CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy(guildid, balance DESC);');
             await client.query('CREATE INDEX IF NOT EXISTS idx_economy_data_gin ON economy USING gin (data);');
             await client.query('CREATE INDEX IF NOT EXISTS idx_economy_guild ON economy(guildid);');
@@ -168,10 +169,10 @@ async function initializeDatabase() {
             if (constraintCheck.rowCount === 0) {
                 await client.query('ALTER TABLE economy ADD CONSTRAINT chk_balance_non_negative CHECK (balance >= 0);');
             }
-            console.log('✅ Indexes for economy table created.');
+            logger.discord.db('✅ Indexes for economy table created.');
 
             // Check and create items table
-            console.log('📋 Creating items table...');
+            logger.discord.db('📋 Creating items table...');
             await client.query(`
                 CREATE TABLE IF NOT EXISTS items (
                     id BIGSERIAL PRIMARY KEY,
@@ -184,10 +185,10 @@ async function initializeDatabase() {
                 );
             `);
             await client.query('CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);');
-            console.log('✅ Items table and index created.');
+            logger.discord.db('✅ Items table and index created.');
 
             // Check and create inventory table
-            console.log('📋 Creating inventory table...');
+            logger.discord.db('📋 Creating inventory table...');
             await client.query(`
                 CREATE TABLE IF NOT EXISTS inventory (
                     userid TEXT NOT NULL,
@@ -201,10 +202,10 @@ async function initializeDatabase() {
                 );
             `);
             await client.query('CREATE INDEX IF NOT EXISTS idx_inventory_user_items ON inventory(userid, guildid);');
-            console.log('✅ Inventory table and index created.');
+            logger.discord.db('✅ Inventory table and index created.');
 
             // Check and create history table
-            console.log('📋 Creating history table...');
+            logger.discord.db('📋 Creating history table...');
             await client.query(`
                 CREATE TABLE IF NOT EXISTS history (
                     id BIGSERIAL,
@@ -222,19 +223,19 @@ async function initializeDatabase() {
             // Note: Foreign key to a partitioned table is not directly supported in all PostgreSQL versions.
             // This might need adjustment based on the specific PostgreSQL version and partitioning strategy.
             // await client.query('ALTER TABLE history ADD CONSTRAINT history_itemid_fkey FOREIGN KEY (itemid) REFERENCES items(id);');
-            console.log('✅ History table and indexes created.');
+            logger.discord.db('✅ History table and indexes created.');
         });
 
-        console.log('✅ Database structure is up to date.');
+        logger.discord.db('✅ Database structure is up to date.');
         return true;
     } catch (error) {
-        console.error('❌ Database initialization failed:', error);
+        logger.discord.dbError('❌ Database initialization failed:', error);
         if (error.code === '42P07') { // relation "..." already exists
-            console.warn('⚠️  One or more tables or indexes already exist. This is likely not an issue.');
+            logger.warn('⚠️  One or more tables or indexes already exist. This is likely not an issue.');
         } else if (error.code === '42501') {
-            console.error('🔧 Fix: Ensure the bot has sufficient permissions (CREATE, ALTER, INDEX) on the database.');
+            logger.discord.dbError('🔧 Fix: Ensure the bot has sufficient permissions (CREATE, ALTER, INDEX) on the database.');
         }
-        console.warn('⚠️  Bot will continue, but database operations may fail.');
+        logger.warn('⚠️  Bot will continue, but database operations may fail.');
         return false;
     }
 }
@@ -275,7 +276,7 @@ async function getUserData(userId, guildId) {
         return userData;
         
     } catch (error) {
-        console.error('Error getting user data:', error);
+        logger.discord.dbError('Error getting user data:', error);
         throw new Error(`Failed to retrieve user data: ${error.message}`);
     }
 }
@@ -323,7 +324,7 @@ async function createUser(userId, guildId) {
             lastGrow: res.rows[0].lastgrow
         };
     } catch (error) {
-        console.error('Error creating user:', error);
+        logger.discord.dbError('Error creating user:', error);
         throw new Error(`Failed to create user: ${error.message}`);
     }
 }
@@ -336,7 +337,7 @@ async function getBalance(userId, guildId) {
         const userData = await getUserData(userId, guildId);
         return userData.balance;
     } catch (error) {
-        console.error(`Error getting balance for ${userId}:${guildId}:`, error);
+        logger.discord.dbError(`Error getting balance for ${userId}:${guildId}:`, error);
         throw error;
     }
 }
@@ -399,7 +400,7 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
             }
 
             // Log transaction for audit trail
-            console.log(`Balance update: ${userId}:${guildId} ${amount > 0 ? '+' : ''}${amount} = ${newBalance} (${reason})`);
+            logger.discord.db(`Balance update: ${userId}:${guildId} ${amount > 0 ? '+' : ''}${amount} = ${newBalance} (${reason})`);
 
             // Add to history
             await historyService.addHistory({
@@ -449,7 +450,7 @@ async function canGrow(userId, guildId) {
             hoursUntilNext: Math.max(0, CONFIG.ECONOMY.GROW_INTERVAL - hoursSinceLastGrow)
         };
     } catch (error) {
-        console.error(`Error checking grow status for ${userId}:${guildId}:`, error);
+        logger.discord.dbError(`Error checking grow status for ${userId}:${guildId}:`, error);
         throw error;
     }
 }
@@ -462,7 +463,7 @@ async function getLastGrow(userId, guildId) {
         const userData = await getUserData(userId, guildId);
         return new Date(userData.lastGrow);
     } catch (error) {
-        console.error(`Error getting last grow for ${userId}:${guildId}:`, error);
+        logger.discord.dbError(`Error getting last grow for ${userId}:${guildId}:`, error);
         return new Date(0); // Fallback for compatibility
     }
 }
@@ -493,7 +494,7 @@ async function updateLastGrow(userId, guildId, customDate = null) {
             type: 'grow'
         });
 
-        console.log(`Updated grow time for ${userId}:${guildId} to ${newDate.toISOString()}`);
+        logger.discord.db(`Updated grow time for ${userId}:${guildId} to ${newDate.toISOString()}`);
         
         return {
             userId: res.rows[0].userid,
@@ -503,7 +504,7 @@ async function updateLastGrow(userId, guildId, customDate = null) {
         };
         
     } catch (error) {
-        console.error(`Error updating last grow for ${userId}:${guildId}:`, error);
+        logger.discord.dbError(`Error updating last grow for ${userId}:${guildId}:`, error);
         throw error;
     }
 }
@@ -539,11 +540,11 @@ async function setBalance(userId, guildId, amount) {
             amount: finalAmount
         });
 
-        console.log(`Set balance for ${userId}:${guildId} to ${finalAmount}`);
+        logger.discord.db(`Set balance for ${userId}:${guildId} to ${finalAmount}`);
         return res.rows[0].balance;
         
     } catch (error) {
-        console.error(`Error setting balance for ${userId}:${guildId}:`, error);
+        logger.discord.dbError(`Error setting balance for ${userId}:${guildId}:`, error);
         throw error;
     }
 }
@@ -573,7 +574,7 @@ async function getTopUsers(guildId, limit = 10, offset = 0) {
         }));
         
     } catch (error) {
-        console.error(`Error getting top users for guild ${guildId}:`, error);
+        logger.discord.dbError(`Error getting top users for guild ${guildId}:`, error);
         throw error;
     }
 }
@@ -598,7 +599,7 @@ async function getUserRank(userId, guildId) {
         return parseInt(res.rows[0].rank);
         
     } catch (error) {
-        console.error(`Error getting rank for ${userId}:${guildId}:`, error);
+        logger.discord.dbError(`Error getting rank for ${userId}:${guildId}:`, error);
         throw error;
     }
 }
@@ -676,7 +677,7 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
             amount: amount
         });
 
-        console.log(`Transfer: ${fromUserId} -> ${toUserId} (${guildId}): ${amount} (${reason})`);
+        logger.discord.db(`Transfer: ${fromUserId} -> ${toUserId} (${guildId}): ${amount} (${reason})`);
 
         return {
             from: { userId: fromUserId, previousBalance: fromBalance, newBalance: fromBalance - amount },
@@ -731,7 +732,7 @@ async function getGuildStats(guildId) {
         };
         
     } catch (error) {
-        console.error(`Error getting guild stats for ${guildId}:`, error);
+        logger.discord.dbError(`Error getting guild stats for ${guildId}:`, error);
         throw error;
     }
 }
@@ -751,7 +752,7 @@ setInterval(() => {
     }
     
     if (cleaned > 0) {
-        console.log(`Cleaned ${cleaned} expired cache entries`);
+        logger.debug(`Cleaned ${cleaned} expired cache entries`);
     }
 }, 300000); // Clean every 5 minutes
 
@@ -763,12 +764,12 @@ let isShuttingDown = false;
  */
 async function cleanup() {
     if (isShuttingDown) {
-        console.log('Shutdown already in progress...');
+        logger.info('Shutdown already in progress...');
         return;
     }
     
     isShuttingDown = true;
-    console.log('Shutting down economy service...');
+    logger.info('Shutting down economy service...');
     
     try {
         // Clear cache
@@ -777,16 +778,16 @@ async function cleanup() {
         // Close pool gracefully only if it's not already ended
         if (!pool.ended) {
             await pool.end();
-            console.log('✅ Economy service shutdown complete');
+            logger.info('✅ Economy service shutdown complete');
         } else {
-            console.log('✅ Economy service already shutdown');
+            logger.info('✅ Economy service already shutdown');
         }
     } catch (error) {
         // Only log if it's not the "called end more than once" error
         if (!error.message.includes('Called end on pool more than once')) {
-            console.error('❌ Error during economy service shutdown:', error);
+            logger.error('❌ Error during economy service shutdown:', error);
         } else {
-            console.log('✅ Economy service shutdown complete (pool already closed)');
+            logger.info('✅ Economy service shutdown complete (pool already closed)');
         }
     }
 }
@@ -808,13 +809,13 @@ async function healthCheck() {
 }
 
 // Initialize database on startup
-initializeDatabase().catch(console.error);
+initializeDatabase().catch(e => logger.discord.dbError('Failed to initialize database', e));
 
 // Enhanced graceful shutdown handlers with single cleanup call
 const gracefulShutdown = (signal) => {
-    console.log(`Received ${signal}, starting graceful shutdown...`);
+    logger.info(`Received ${signal}, starting graceful shutdown...`);
     cleanup().finally(() => {
-        console.log(`Exiting on ${signal}`);
+        logger.info(`Exiting on ${signal}`);
         process.exit(0);
     });
 };
@@ -830,12 +831,12 @@ process.once('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
 
 // Handle uncaught exceptions and unhandled rejections
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+    logger.error('Uncaught Exception:', error);
     gracefulShutdown('uncaughtException');
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
     gracefulShutdown('unhandledRejection');
 });
 

@@ -5,10 +5,11 @@
 
 import { EmbedBuilder } from 'discord.js';
 import CONFIG from '../config/config.js';
+import logger from '../services/loggerService.js';
 
 class ErrorHandler {
   static async handle(error, message, command = null) {
-    console.error(`Error in ${command ? command.name : 'unknown command'}:`, error);
+    logger.discord.cmdError(`Error in ${command ? command.name : 'unknown command'}:`, error);
 
     // Create error embed
     const embed = new EmbedBuilder()
@@ -21,11 +22,11 @@ class ErrorHandler {
     try {
       await message.reply({ embeds: [embed] });
     } catch (replyError) {
-      console.error('Failed to send error message:', replyError);
+      logger.discord.error('Failed to send error message:', replyError);
       try {
         await message.channel.send('An error occurred while processing your command.');
       } catch (fallbackError) {
-        console.error('Failed to send fallback error message:', fallbackError);
+        logger.discord.error('Failed to send fallback error message:', fallbackError);
       }
     }
   }
@@ -63,13 +64,13 @@ class ErrorHandler {
   }
 
   static async handleUncaughtException(error) {
-    console.error('Uncaught Exception:', error);
+    logger.error('Uncaught Exception:', error);
     // Here you could add additional error reporting services
     process.exit(1);
   }
 
   static async handleUnhandledRejection(reason, promise) {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
     // Here you could add additional error reporting services
   }
 }
