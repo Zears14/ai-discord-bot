@@ -1,6 +1,7 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
 const { Pool } = pg;
+import { createPoolConfig } from './dbConfig.js';
 import historyService from './historyService.js';
 import itemsService from './itemsService.js';
 import { parsePositiveAmount, toBigInt } from '../utils/moneyUtils.js';
@@ -11,9 +12,7 @@ function init(handler) {
   itemHandler = handler;
 }
 
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URI,
-});
+const pool = new Pool(createPoolConfig());
 
 async function getInventory(userId, guildId) {
   const query = `

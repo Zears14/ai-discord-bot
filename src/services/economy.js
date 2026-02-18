@@ -6,6 +6,7 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
 const { Pool } = pg;
+import { createPoolConfig } from './dbConfig.js';
 import historyService from './historyService.js';
 import jsonbService from './jsonbService.js';
 import logger from './loggerService.js';
@@ -13,18 +14,19 @@ import CONFIG from '../config/config.js';
 import { ensurePgBigIntRange, toBigInt } from '../utils/moneyUtils.js';
 
 // Enhanced connection pool with better configuration
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URI,
-  max: 20,
-  min: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-  acquireTimeoutMillis: 60000,
-  allowExitOnIdle: false,
-  statement_timeout: 30000,
-  query_timeout: 30000,
-  application_name: 'discord-bot-economy',
-});
+const pool = new Pool(
+  createPoolConfig({
+    max: 20,
+    min: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+    acquireTimeoutMillis: 60000,
+    allowExitOnIdle: false,
+    statement_timeout: 30000,
+    query_timeout: 30000,
+    application_name: 'discord-bot-economy',
+  })
+);
 
 // Connection pool event handlers
 pool.on('connect', () => {

@@ -1,11 +1,10 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
+import { createPoolConfig } from './dbConfig.js';
 import logger from './loggerService.js';
 const { Pool } = pg;
 
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URI,
-});
+const pool = new Pool(createPoolConfig());
 
 /**
  * Adds a new entry to the history table.

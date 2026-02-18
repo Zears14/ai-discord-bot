@@ -1,11 +1,10 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
 const { Pool } = pg;
+import { createPoolConfig } from './dbConfig.js';
 import { toBigInt } from '../utils/moneyUtils.js';
 
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URI,
-});
+const pool = new Pool(createPoolConfig());
 
 function normalizePrice(price) {
   if (price === undefined || price === null) {

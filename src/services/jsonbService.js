@@ -5,12 +5,14 @@
 
 import pg from 'pg';
 import './pgTypeParsers.js';
+import { createPoolConfig } from './dbConfig.js';
 const { Pool } = pg;
 
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URI,
-  application_name: 'discord-bot-jsonbService',
-});
+const pool = new Pool(
+  createPoolConfig({
+    application_name: 'discord-bot-jsonbService',
+  })
+);
 
 /**
  * Get JSONB data for user
