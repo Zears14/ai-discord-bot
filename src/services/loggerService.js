@@ -10,6 +10,20 @@ const logDirectory = path.join(__dirname, '..', '..', 'logs');
 const isDevelopment = process.env.IS_DEVEL === 'true';
 const level = isDevelopment ? 'debug' : 'info';
 
+const bigintJsonReplacer = (_key, value) => (typeof value === 'bigint' ? value.toString() : value);
+
+function serializeMetaValue(value) {
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    return JSON.stringify(value, bigintJsonReplacer);
+  }
+
+  return value;
+}
+
 // Remove kernel level mappings - use Winston levels directly
 
 // Custom format for logs
@@ -27,7 +41,7 @@ const format = winston.format.printf(({ message, timestamp, module, ...meta }) =
   if (Object.keys(meta).length > 0) {
     const metaStr = Object.entries(meta)
       .filter(([key]) => key !== 'timestamp' && key !== 'level' && key !== 'module')
-      .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
+      .map(([key, value]) => `${key}=${serializeMetaValue(value)}`)
       .join(' ');
 
     if (metaStr) {
@@ -65,7 +79,7 @@ const consoleFormat = winston.format.printf(({ level, message, timestamp, module
   if (Object.keys(meta).length > 0) {
     const metaStr = Object.entries(meta)
       .filter(([key]) => key !== 'timestamp' && key !== 'level' && key !== 'module')
-      .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
+      .map(([key, value]) => `${key}=${serializeMetaValue(value)}`)
       .join(' ');
 
     if (metaStr) {

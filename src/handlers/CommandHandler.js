@@ -31,6 +31,7 @@ class CommandHandler {
     this.aliases = new Collection();
     this.categories = new Set();
     this.cooldowns = new Collection();
+    this.activeUserCommands = new Collection();
 
     // WeakMap for storing command metadata to allow garbage collection
     this.commandMetadata = new WeakMap();
@@ -48,8 +49,8 @@ class CommandHandler {
     setInterval(() => {
       const now = Date.now();
       for (const [commandName, timestamps] of this.cooldowns) {
-        for (const [userId, timestamp] of timestamps) {
-          if (now - timestamp > CONFIG.COMMANDS.COOLDOWNS.DEFAULT * 1000) {
+        for (const [userId, expirationTime] of timestamps) {
+          if (now >= expirationTime) {
             timestamps.delete(userId);
           }
         }
@@ -193,6 +194,14 @@ class CommandHandler {
       }
     }
 
+    // Prevent concurrent command sessions per user
+    const activeCommand = this.activeUserCommands.get(message.author.id);
+    if (activeCommand) {
+      return message.reply(
+        `You already have an active \`${activeCommand}\` session. Finish it before starting another command.`
+      );
+    }
+
     // Check cooldown
     const cooldownTime = this.checkCooldown(message.author.id, command);
     if (cooldownTime > 0) {
@@ -201,10 +210,20 @@ class CommandHandler {
       );
     }
 
+    const hasExclusiveSession = Boolean(command.exclusiveSession);
+
     try {
+      if (hasExclusiveSession) {
+        this.activeUserCommands.set(message.author.id, command.name);
+      }
       await command.execute(message, args);
     } catch (error) {
       await ErrorHandler.handle(error, message, command);
+    } finally {
+      // Only clear if this command still owns the active session
+      if (hasExclusiveSession && this.activeUserCommands.get(message.author.id) === command.name) {
+        this.activeUserCommands.delete(message.author.id);
+      }
     }
   }
 }

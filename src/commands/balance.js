@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 class BalanceCommand extends BaseCommand {
   constructor(client) {
@@ -38,7 +39,7 @@ class BalanceCommand extends BaseCommand {
       .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
       .addFields(
         { name: 'User', value: targetUser.username, inline: true },
-        { name: 'Length', value: `${balance} cm`, inline: true }
+        { name: 'Length', value: `${formatMoney(balance)} cm`, inline: true }
       )
       .setFooter({
         text:

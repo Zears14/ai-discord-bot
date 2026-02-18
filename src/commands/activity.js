@@ -3,6 +3,7 @@ import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import historyService from '../services/historyService.js';
 import logger from '../services/loggerService.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 class ActivityCommand extends BaseCommand {
   constructor(client) {
@@ -39,8 +40,8 @@ class ActivityCommand extends BaseCommand {
       // Format activities into a readable list
       const formattedActivities = activities.map((activity) => {
         let description = `**${activity.type}**`;
-        if (activity.amount !== 0) {
-          description += ` | ${activity.amount > 0 ? '+' : ''}${activity.amount}`;
+        if (activity.amount !== 0n) {
+          description += ` | ${activity.amount > 0n ? '+' : ''}${formatMoney(activity.amount)} cm`;
         }
         if (activity.item_name) {
           description += ` | ${activity.item_title || activity.item_name}`;
@@ -54,9 +55,11 @@ class ActivityCommand extends BaseCommand {
       // Add summary statistics
       const stats = await historyService.getUserStats(target.id, message.guild.id);
       if (stats) {
+        const netGains =
+          (stats.total_earned ?? 0n) + (stats.total_won ?? 0n) + (stats.total_lost ?? 0n);
         activityEmbed.addFields({
           name: '📊 Summary',
-          value: `Games Played: ${stats.games_played}\nTotal Gambled: ${stats.total_gambled}\nNet Gains: ${stats.total_gained + stats.total_lost}`,
+          value: `Games Played: ${stats.games_played ?? 0n}\nTotal Gambled: ${formatMoney(stats.total_gambled ?? 0n)} cm\nNet Gains: ${formatMoney(netGains)} cm`,
         });
       }
 

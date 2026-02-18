@@ -8,6 +8,7 @@ import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
 import logger from '../services/loggerService.js';
+import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
 
 class TransferCommand extends BaseCommand {
   constructor(client) {
@@ -47,8 +48,10 @@ class TransferCommand extends BaseCommand {
     }
 
     // Parse amount
-    const amount = parseInt(args[1]);
-    if (isNaN(amount) || amount <= 0) {
+    let amount;
+    try {
+      amount = parsePositiveAmount(args[1], 'Transfer amount');
+    } catch {
       return message.reply('Please provide a valid amount to transfer.');
     }
 
@@ -61,13 +64,17 @@ class TransferCommand extends BaseCommand {
         .setColor(CONFIG.COLORS.SUCCESS)
         .setTitle('Transfer Successful')
         .setDescription(
-          `You have successfully transferred ${amount} cm Dih to ${recipient.username}.`
+          `You have successfully transferred ${formatMoney(amount)} cm Dih to ${recipient.username}.`
         )
         .addFields(
-          { name: 'Your New Balance', value: `${transaction.from.newBalance} cm`, inline: true },
+          {
+            name: 'Your New Balance',
+            value: `${formatMoney(transaction.from.newBalance)} cm`,
+            inline: true,
+          },
           {
             name: `${recipient.username}'s New Balance`,
-            value: `${transaction.to.newBalance} cm`,
+            value: `${formatMoney(transaction.to.newBalance)} cm`,
             inline: true,
           }
         )
@@ -78,7 +85,7 @@ class TransferCommand extends BaseCommand {
       logger.discord.cmdError('Transfer error:', error);
       if (error.message.startsWith('Insufficient balance')) {
         const balance = await economy.getBalance(fromUserId, guildId);
-        return message.reply(`You don't have enough Dih! Your balance: ${balance} cm`);
+        return message.reply(`You don't have enough Dih! Your balance: ${formatMoney(balance)} cm`);
       }
       return message.reply('An error occurred during the transfer. Please try again later.');
     }

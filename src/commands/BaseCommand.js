@@ -17,6 +17,7 @@ class BaseCommand {
       cooldown = CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
       aliases = [],
       permissions = [],
+      exclusiveSession = false,
     }
   ) {
     this.client = client;
@@ -28,6 +29,7 @@ class BaseCommand {
     this.cooldown = cooldown;
     this.aliases = aliases;
     this.permissions = permissions;
+    this.exclusiveSession = exclusiveSession;
   }
 
   /**

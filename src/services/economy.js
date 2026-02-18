@@ -4,11 +4,13 @@
  */
 
 import pg from 'pg';
+import './pgTypeParsers.js';
 const { Pool } = pg;
 import historyService from './historyService.js';
 import jsonbService from './jsonbService.js';
 import logger from './loggerService.js';
 import CONFIG from '../config/config.js';
+import { ensurePgBigIntRange, toBigInt } from '../utils/moneyUtils.js';
 
 // Enhanced connection pool with better configuration
 const pool = new Pool({
@@ -36,6 +38,9 @@ pool.on('error', (err) => {
 // Cache for frequently accessed data
 const userCache = new Map();
 const CACHE_TTL = 60000; // 1 minute cache
+const DEFAULT_BALANCE = toBigInt(CONFIG.DATABASE.DEFAULT_BALANCE ?? 0, 'Default balance');
+const MIN_BALANCE = toBigInt(CONFIG.ECONOMY.MIN_BALANCE ?? 0, 'Minimum balance');
+const RICH_THRESHOLD = toBigInt(CONFIG.ECONOMY.RICH_THRESHOLD ?? 10000, 'Rich threshold');
 
 /**
  * Cache utilities
@@ -103,7 +108,7 @@ async function safeQuery(query, params = [], retries = 3) {
         client.release();
       }
     } catch (error) {
-      logger.discord.dbError(`Query attempt ${attempt} failed:`, error.message);
+      logger.discord.dbError(`Query attempt ${attempt} failed:`, { error: error.message });
 
       if (attempt === retries) throw error;
 
@@ -136,7 +141,7 @@ async function initializeDatabase() {
                     CREATE TABLE economy (
                         userid TEXT NOT NULL,
                         guildid TEXT NOT NULL,
-                        balance INTEGER NOT NULL DEFAULT 0,
+                        balance BIGINT NOT NULL DEFAULT 0,
                         lastgrow TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 07:00:00+07',
                         data JSONB DEFAULT '{}'::jsonb,
                         PRIMARY KEY (userid, guildid)
@@ -145,6 +150,15 @@ async function initializeDatabase() {
         logger.discord.db('✅ Economy table created.');
       } else {
         logger.discord.db('✅ Economy table exists. Checking columns...');
+        const balanceColumn = economyTableInfo.rows.find((row) => row.column_name === 'balance');
+        if (balanceColumn && balanceColumn.data_type !== 'bigint') {
+          logger.discord.db('🔧 Migrating economy.balance to BIGINT...');
+          await client.query(
+            'ALTER TABLE economy ALTER COLUMN balance TYPE BIGINT USING balance::bigint;'
+          );
+          logger.discord.db('✅ economy.balance migrated to BIGINT.');
+        }
+
         // Add 'data' column if it doesn't exist
         const hasDataColumn = economyTableInfo.rows.some((row) => row.column_name === 'data');
         if (!hasDataColumn) {
@@ -189,11 +203,22 @@ async function initializeDatabase() {
                     name TEXT NOT NULL UNIQUE,
                     title TEXT,
                     type TEXT NOT NULL,
-                    price INTEGER,
+                    price BIGINT,
                     data JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
             `);
+      const itemsTableInfo = await client.query(`
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_name = 'items' AND table_schema = 'public';
+            `);
+      const priceColumn = itemsTableInfo.rows.find((row) => row.column_name === 'price');
+      if (priceColumn && priceColumn.data_type !== 'bigint') {
+        logger.discord.db('🔧 Migrating items.price to BIGINT...');
+        await client.query('ALTER TABLE items ALTER COLUMN price TYPE BIGINT USING price::bigint;');
+        logger.discord.db('✅ items.price migrated to BIGINT.');
+      }
       await client.query('CREATE INDEX IF NOT EXISTS idx_items_type ON items(type);');
       logger.discord.db('✅ Items table and index created.');
 
@@ -204,32 +229,108 @@ async function initializeDatabase() {
                     userid TEXT NOT NULL,
                     guildid TEXT NOT NULL,
                     itemid BIGINT NOT NULL,
-                    quantity INTEGER NOT NULL DEFAULT 1,
+                    quantity BIGINT NOT NULL DEFAULT 1,
                     meta JSONB DEFAULT '{}'::jsonb,
                     PRIMARY KEY (userid, guildid, itemid),
                     CONSTRAINT inventory_userid_guildid_fkey FOREIGN KEY (userid, guildid) REFERENCES economy(userid, guildid) ON DELETE CASCADE,
                     CONSTRAINT inventory_itemid_fkey FOREIGN KEY (itemid) REFERENCES items(id) ON DELETE RESTRICT
                 );
             `);
+      const inventoryTableInfo = await client.query(`
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_name = 'inventory' AND table_schema = 'public';
+            `);
+      const quantityColumn = inventoryTableInfo.rows.find((row) => row.column_name === 'quantity');
+      if (quantityColumn && quantityColumn.data_type !== 'bigint') {
+        logger.discord.db('🔧 Migrating inventory.quantity to BIGINT...');
+        await client.query(
+          'ALTER TABLE inventory ALTER COLUMN quantity TYPE BIGINT USING quantity::bigint;'
+        );
+        logger.discord.db('✅ inventory.quantity migrated to BIGINT.');
+      }
       await client.query(
         'CREATE INDEX IF NOT EXISTS idx_inventory_user_items ON inventory(userid, guildid);'
       );
       logger.discord.db('✅ Inventory table and index created.');
 
-      // Check and create history table
-      logger.discord.db('📋 Creating history table...');
-      await client.query(`
-                CREATE TABLE IF NOT EXISTS history (
-                    id BIGSERIAL,
-                    userid TEXT NOT NULL,
-                    guildid TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    itemid BIGINT,
-                    amount INTEGER NOT NULL DEFAULT 0,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (id, created_at)
-                ) PARTITION BY RANGE (created_at);
+      // Check and create history table (non-partitioned)
+      logger.discord.db('📋 Checking history table...');
+      const historyTableInfo = await client.query(`
+                SELECT c.relkind
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relname = 'history'
+                LIMIT 1;
             `);
+
+      if (historyTableInfo.rowCount === 0) {
+        await client.query(`
+                    CREATE TABLE history (
+                        id BIGSERIAL,
+                        userid TEXT NOT NULL,
+                        guildid TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        itemid BIGINT,
+                        amount BIGINT NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (id, created_at)
+                    );
+                `);
+        logger.discord.db('✅ History table created.');
+      } else if (historyTableInfo.rows[0].relkind === 'p') {
+        logger.warn('⚠️  History table is partitioned. Migrating to a regular table...');
+
+        await client.query('DROP TABLE IF EXISTS history_unpartitioned_new;');
+        await client.query(`
+                    CREATE TABLE history_unpartitioned_new (
+                        id BIGSERIAL,
+                        userid TEXT NOT NULL,
+                        guildid TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        itemid BIGINT,
+                        amount BIGINT NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        PRIMARY KEY (id, created_at)
+                    );
+                `);
+
+        await client.query(`
+                    INSERT INTO history_unpartitioned_new (id, userid, guildid, type, itemid, amount, created_at)
+                    SELECT id, userid, guildid, type, itemid, amount, created_at
+                    FROM history;
+                `);
+
+        await client.query('DROP TABLE history CASCADE;');
+        await client.query('ALTER TABLE history_unpartitioned_new RENAME TO history;');
+
+        await client.query(`
+                    SELECT setval(
+                        pg_get_serial_sequence('history', 'id'),
+                        COALESCE((SELECT MAX(id) FROM history), 1),
+                        (SELECT COUNT(*) > 0 FROM history)
+                    );
+                `);
+
+        logger.discord.db('✅ History table migrated to non-partitioned schema.');
+      } else {
+        logger.discord.db('✅ History table already uses non-partitioned schema.');
+      }
+
+      const historyTableColumns = await client.query(`
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_name = 'history' AND table_schema = 'public';
+            `);
+      const amountColumn = historyTableColumns.rows.find((row) => row.column_name === 'amount');
+      if (amountColumn && amountColumn.data_type !== 'bigint') {
+        logger.discord.db('🔧 Migrating history.amount to BIGINT...');
+        await client.query(
+          'ALTER TABLE history ALTER COLUMN amount TYPE BIGINT USING amount::bigint;'
+        );
+        logger.discord.db('✅ history.amount migrated to BIGINT.');
+      }
+
       await client.query(
         'CREATE INDEX IF NOT EXISTS idx_history_user_recent ON history(userid, guildid, created_at DESC);'
       );
@@ -304,7 +405,7 @@ async function createUser(userId, guildId) {
   const defaultData = {
     userId,
     guildId,
-    balance: CONFIG.DATABASE.DEFAULT_BALANCE,
+    balance: DEFAULT_BALANCE,
     lastGrow: new Date(0),
   };
 
@@ -362,9 +463,7 @@ async function getBalance(userId, guildId) {
  * Update user's balance with enhanced validation and atomic operations
  */
 async function updateBalance(userId, guildId, amount, reason = 'update') {
-  if (typeof amount !== 'number' || isNaN(amount)) {
-    throw new Error('Amount must be a valid number');
-  }
+  const parsedAmount = toBigInt(amount, 'Amount');
 
   return withTransaction(async (client) => {
     try {
@@ -378,12 +477,19 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
 
       let newBalance;
       let isNewUser = false;
-      const minBalance = CONFIG.ECONOMY.MIN_BALANCE || 0;
+      const minBalance = MIN_BALANCE;
 
       if (res.rowCount === 0) {
-        // Create new user - ensure non-negative balance
-        const defaultBalance = CONFIG.DATABASE.DEFAULT_BALANCE || 0;
-        newBalance = Math.max(minBalance, defaultBalance + amount);
+        // Create new user and apply change
+        newBalance = DEFAULT_BALANCE + parsedAmount;
+        ensurePgBigIntRange(newBalance, 'Resulting balance');
+        if (newBalance < minBalance) {
+          throw new Error(
+            'Transaction would violate minimum balance. ' +
+              `Current: ${DEFAULT_BALANCE}, Change: ${parsedAmount}, ` +
+              `Resulting: ${newBalance}, Minimum: ${minBalance}`
+          );
+        }
 
         await client.query(
           `INSERT INTO economy (userid, guildid, balance, lastgrow)
@@ -393,14 +499,15 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
         isNewUser = true;
       } else {
         // Update existing user - ensure balance doesn't go negative
-        const currentBalance = res.rows[0].balance;
-        const proposedBalance = currentBalance + amount;
+        const currentBalance = toBigInt(res.rows[0].balance, 'Current balance');
+        const proposedBalance = currentBalance + parsedAmount;
+        ensurePgBigIntRange(proposedBalance, 'Resulting balance');
 
         // Check if the operation would violate minimum balance
         if (proposedBalance < minBalance) {
           throw new Error(
             'Transaction would violate minimum balance. ' +
-              `Current: ${currentBalance}, Change: ${amount}, ` +
+              `Current: ${currentBalance}, Change: ${parsedAmount}, ` +
               `Resulting: ${proposedBalance}, Minimum: ${minBalance}`
           );
         }
@@ -417,16 +524,19 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
 
       // Log transaction for audit trail
       logger.discord.db(
-        `Balance update: ${userId}:${guildId} ${amount > 0 ? '+' : ''}${amount} = ${newBalance} (${reason})`
+        `Balance update: ${userId}:${guildId} ${parsedAmount > 0n ? '+' : ''}${parsedAmount} = ${newBalance} (${reason})`
       );
 
       // Add to history
-      await historyService.addHistory({
-        userid: userId,
-        guildid: guildId,
-        type: reason,
-        amount: amount,
-      });
+      await historyService.addHistory(
+        {
+          userid: userId,
+          guildid: guildId,
+          type: reason,
+          amount: parsedAmount,
+        },
+        client
+      );
 
       // Invalidate cache
       invalidateCache(userId, guildId);
@@ -435,8 +545,8 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
         userId,
         guildId,
         balance: newBalance,
-        previousBalance: isNewUser ? CONFIG.DATABASE.DEFAULT_BALANCE : res.rows[0]?.balance,
-        amount,
+        previousBalance: isNewUser ? DEFAULT_BALANCE : toBigInt(res.rows[0]?.balance ?? 0n),
+        amount: parsedAmount,
         reason,
       };
     } catch (error) {
@@ -495,32 +605,36 @@ async function updateLastGrow(userId, guildId, customDate = null) {
   const newDate = customDate || new Date();
 
   try {
-    const res = await safeQuery(
-      `INSERT INTO economy (userid, guildid, balance, lastgrow)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (userid, guildid)
-             DO UPDATE SET lastgrow = EXCLUDED.lastgrow
-             RETURNING *`,
-      [userId, guildId, CONFIG.DATABASE.DEFAULT_BALANCE, newDate]
-    );
+    const result = await withTransaction(async (client) => {
+      const res = await client.query(
+        `INSERT INTO economy (userid, guildid, balance, lastgrow)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (userid, guildid)
+               DO UPDATE SET lastgrow = EXCLUDED.lastgrow
+               RETURNING *`,
+        [userId, guildId, DEFAULT_BALANCE, newDate]
+      );
 
-    // Invalidate cache
-    invalidateCache(userId, guildId);
+      await historyService.addHistory(
+        {
+          userid: userId,
+          guildid: guildId,
+          type: 'grow',
+        },
+        client
+      );
 
-    // Add to history
-    await historyService.addHistory({
-      userid: userId,
-      guildid: guildId,
-      type: 'grow',
+      return res.rows[0];
     });
 
+    invalidateCache(userId, guildId);
     logger.discord.db(`Updated grow time for ${userId}:${guildId} to ${newDate.toISOString()}`);
 
     return {
-      userId: res.rows[0].userid,
-      guildId: res.rows[0].guildid,
-      balance: res.rows[0].balance,
-      lastGrow: res.rows[0].lastgrow,
+      userId: result.userid,
+      guildId: result.guildid,
+      balance: result.balance,
+      lastGrow: result.lastgrow,
     };
   } catch (error) {
     logger.discord.dbError(`Error updating last grow for ${userId}:${guildId}:`, error);
@@ -532,35 +646,40 @@ async function updateLastGrow(userId, guildId, customDate = null) {
  * Set balance directly with validation
  */
 async function setBalance(userId, guildId, amount) {
-  if (typeof amount !== 'number' || isNaN(amount) || amount < 0) {
-    throw new Error('Amount must be a non-negative number');
+  const parsedAmount = toBigInt(amount, 'Amount');
+  if (parsedAmount < 0n) {
+    throw new Error('Amount must be a non-negative integer');
   }
-
-  const finalAmount = Math.max(CONFIG.ECONOMY.MIN_BALANCE, amount);
+  const finalAmount = parsedAmount < MIN_BALANCE ? MIN_BALANCE : parsedAmount;
+  ensurePgBigIntRange(finalAmount, 'Final amount');
 
   try {
-    const res = await safeQuery(
-      `INSERT INTO economy (userid, guildid, balance, lastgrow)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (userid, guildid)
-             DO UPDATE SET balance = EXCLUDED.balance
-             RETURNING balance`,
-      [userId, guildId, finalAmount, new Date(0)]
-    );
+    const res = await withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO economy (userid, guildid, balance, lastgrow)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (userid, guildid)
+               DO UPDATE SET balance = EXCLUDED.balance
+               RETURNING balance`,
+        [userId, guildId, finalAmount, new Date(0)]
+      );
 
-    // Invalidate cache
-    invalidateCache(userId, guildId);
+      await historyService.addHistory(
+        {
+          userid: userId,
+          guildid: guildId,
+          type: 'set-balance',
+          amount: finalAmount,
+        },
+        client
+      );
 
-    // Add to history
-    await historyService.addHistory({
-      userid: userId,
-      guildid: guildId,
-      type: 'set-balance',
-      amount: finalAmount,
+      return result.rows[0];
     });
 
+    invalidateCache(userId, guildId);
     logger.discord.db(`Set balance for ${userId}:${guildId} to ${finalAmount}`);
-    return res.rows[0].balance;
+    return res.balance;
   } catch (error) {
     logger.discord.dbError(`Error setting balance for ${userId}:${guildId}:`, error);
     throw error;
@@ -624,8 +743,9 @@ async function getUserRank(userId, guildId) {
  * Transfer money between users
  */
 async function transferBalance(fromUserId, toUserId, guildId, amount, reason = 'transfer') {
-  if (typeof amount !== 'number' || amount <= 0 || isNaN(amount)) {
-    throw new Error('Transfer amount must be a positive number');
+  const parsedAmount = toBigInt(amount, 'Transfer amount');
+  if (parsedAmount <= 0n) {
+    throw new Error('Transfer amount must be a positive integer');
   }
 
   return withTransaction(async (client) => {
@@ -641,9 +761,9 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
       throw new Error('Sender not found');
     }
 
-    const fromBalance = fromRes.rows[0].balance;
-    if (fromBalance < amount) {
-      throw new Error(`Insufficient balance: ${fromBalance} < ${amount}`);
+    const fromBalance = toBigInt(fromRes.rows[0].balance, 'Sender balance');
+    if (fromBalance < parsedAmount) {
+      throw new Error(`Insufficient balance: ${fromBalance} < ${parsedAmount}`);
     }
 
     // Ensure recipient exists
@@ -651,7 +771,7 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
       `INSERT INTO economy (userid, guildid, balance, lastgrow)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (userid, guildid) DO NOTHING`,
-      [toUserId, guildId, CONFIG.DATABASE.DEFAULT_BALANCE, new Date(0)]
+      [toUserId, guildId, DEFAULT_BALANCE, new Date(0)]
     );
 
     // Lock recipient
@@ -662,19 +782,23 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
       [toUserId, guildId]
     );
 
-    const toBalance = toRes.rows[0].balance;
+    const toBalance = toBigInt(toRes.rows[0].balance, 'Recipient balance');
+    const fromNewBalance = fromBalance - parsedAmount;
+    const toNewBalance = toBalance + parsedAmount;
+    ensurePgBigIntRange(fromNewBalance, 'Sender resulting balance');
+    ensurePgBigIntRange(toNewBalance, 'Recipient resulting balance');
 
     // Update balances
     await client.query('UPDATE economy SET balance = $3 WHERE userid = $1 AND guildid = $2', [
       fromUserId,
       guildId,
-      fromBalance - amount,
+      fromNewBalance,
     ]);
 
     await client.query('UPDATE economy SET balance = $3 WHERE userid = $1 AND guildid = $2', [
       toUserId,
       guildId,
-      toBalance + amount,
+      toNewBalance,
     ]);
 
     // Invalidate caches
@@ -682,25 +806,33 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
     invalidateCache(toUserId, guildId);
 
     // Add to history
-    await historyService.addHistory({
-      userid: fromUserId,
-      guildid: guildId,
-      type: 'transfer-out',
-      amount: -amount,
-    });
-    await historyService.addHistory({
-      userid: toUserId,
-      guildid: guildId,
-      type: 'transfer-in',
-      amount: amount,
-    });
+    await historyService.addHistory(
+      {
+        userid: fromUserId,
+        guildid: guildId,
+        type: 'transfer-out',
+        amount: -parsedAmount,
+      },
+      client
+    );
+    await historyService.addHistory(
+      {
+        userid: toUserId,
+        guildid: guildId,
+        type: 'transfer-in',
+        amount: parsedAmount,
+      },
+      client
+    );
 
-    logger.discord.db(`Transfer: ${fromUserId} -> ${toUserId} (${guildId}): ${amount} (${reason})`);
+    logger.discord.db(
+      `Transfer: ${fromUserId} -> ${toUserId} (${guildId}): ${parsedAmount} (${reason})`
+    );
 
     return {
-      from: { userId: fromUserId, previousBalance: fromBalance, newBalance: fromBalance - amount },
-      to: { userId: toUserId, previousBalance: toBalance, newBalance: toBalance + amount },
-      amount,
+      from: { userId: fromUserId, previousBalance: fromBalance, newBalance: fromNewBalance },
+      to: { userId: toUserId, previousBalance: toBalance, newBalance: toNewBalance },
+      amount: parsedAmount,
       reason,
     };
   });
@@ -736,17 +868,17 @@ async function getGuildStats(guildId) {
                 COUNT(CASE WHEN balance > $2 THEN 1 END) as rich_users
              FROM economy 
              WHERE guildid = $1`,
-      [guildId, CONFIG.ECONOMY.RICH_THRESHOLD || 10000]
+      [guildId, RICH_THRESHOLD]
     );
 
     const stats = res.rows[0];
     return {
-      totalUsers: parseInt(stats.total_users),
-      totalBalance: parseInt(stats.total_balance) || 0,
-      avgBalance: parseFloat(stats.avg_balance) || 0,
-      maxBalance: parseInt(stats.max_balance) || 0,
-      minBalance: parseInt(stats.min_balance) || 0,
-      richUsers: parseInt(stats.rich_users),
+      totalUsers: Number(stats.total_users ?? 0n),
+      totalBalance: stats.total_balance ?? 0n,
+      avgBalance: stats.avg_balance === null ? 0 : Number(stats.avg_balance),
+      maxBalance: stats.max_balance ?? 0n,
+      minBalance: stats.min_balance ?? 0n,
+      richUsers: Number(stats.rich_users ?? 0n),
     };
   } catch (error) {
     logger.discord.dbError(`Error getting guild stats for ${guildId}:`, error);

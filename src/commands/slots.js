@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
 
 class SlotsCommand extends BaseCommand {
   constructor(client) {
@@ -12,15 +13,17 @@ class SlotsCommand extends BaseCommand {
       usage: 'slots <bet>',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: [],
+      exclusiveSession: true,
     });
   }
 
   async execute(message, args) {
     const userId = message.author.id;
     const guildId = message.guild.id;
-    const bet = parseInt(args[0]);
-
-    if (isNaN(bet) || bet <= 0) {
+    let bet;
+    try {
+      bet = parsePositiveAmount(args[0], 'Bet amount');
+    } catch {
       return message.reply('Please provide a valid bet amount.');
     }
 
@@ -71,40 +74,40 @@ class SlotsCommand extends BaseCommand {
     await msg.edit({ embeds: [thirdReelEmbed] });
 
     // Calculate winnings
-    let winnings = 0;
-    let resultMessage = `You lost ${bet} cm Dih.`;
+    let winnings = 0n;
+    let resultMessage = `You lost ${formatMoney(bet)} cm Dih.`;
 
     if (reel1 === reel2 && reel2 === reel3) {
       if (reel1 === '💎') {
-        winnings = bet * 5;
+        winnings = bet * 5n;
       } else if (reel1 === '⭐') {
-        winnings = bet * 3;
+        winnings = bet * 3n;
       } else {
-        winnings = bet * 2;
+        winnings = bet * 2n;
       }
     } else if (reel1 === reel2 || reel2 === reel3 || reel1 === reel3) {
-      winnings = bet * 1.5;
+      winnings = (bet * 3n) / 2n;
     }
 
-    let finalWinnings = winnings - bet;
+    const balanceDelta = winnings - bet;
 
-    await economy.updateBalance(userId, guildId, finalWinnings, 'slots');
+    await economy.updateBalance(userId, guildId, balanceDelta, 'slots');
     const newBalance = await economy.getBalance(userId, guildId);
 
-    if (winnings > 0) {
-      resultMessage = `You won ${winnings} cm Dih!`;
+    if (winnings > 0n) {
+      resultMessage = `You won ${formatMoney(winnings)} cm Dih!`;
     }
 
     // Brief pause before showing result
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     const finalEmbed = new EmbedBuilder()
-      .setColor(winnings > 0 ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
+      .setColor(winnings > 0n ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
       .setTitle('🎰 Slot Machine 🎰')
       .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
       .addFields(
         { name: 'Result', value: resultMessage, inline: true },
-        { name: 'New Balance', value: `${newBalance} cm`, inline: true }
+        { name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true }
       )
       .setTimestamp();
 

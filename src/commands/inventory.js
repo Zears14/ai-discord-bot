@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import inventoryService from '../services/inventoryService.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 class InventoryCommand extends BaseCommand {
   constructor(client) {
@@ -44,7 +45,7 @@ class InventoryCommand extends BaseCommand {
         inventoryPage
           .map(
             (item) =>
-              `**${item.title}** (x${item.quantity}) - ${item.price} Dih\n*${item.data.description}*`
+              `**${item.title}** (x${formatMoney(item.quantity)}) - ${formatMoney(item.price)} Dih\n*${item.data.description}*`
           )
           .join('\n\n')
       );

@@ -1,4 +1,5 @@
 import economy from '../services/economy.js';
+import { formatMoney, toBigInt } from '../utils/moneyUtils.js';
 
 export default {
   name: 'dih_coin',
@@ -10,11 +11,12 @@ export default {
     value: 10,
   },
   async use(userId, guildId, quantity = 1) {
-    const totalValue = this.data.value * quantity;
+    const parsedQuantity = toBigInt(quantity, 'Quantity');
+    const totalValue = BigInt(this.data.value) * parsedQuantity;
     await economy.updateBalance(userId, guildId, totalValue, 'dih-coin-reward');
     return {
       success: true,
-      message: `You used ${quantity} ${this.name} and got ${totalValue} Dih.`,
+      message: `You used ${formatMoney(parsedQuantity)} ${this.name} and got ${formatMoney(totalValue)} Dih.`,
     };
   },
 };

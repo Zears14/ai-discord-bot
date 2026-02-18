@@ -2,6 +2,7 @@ import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'disc
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
 
 class WagerCommand extends BaseCommand {
   constructor(client) {
@@ -12,6 +13,7 @@ class WagerCommand extends BaseCommand {
       usage: 'wager <@user> <amount>',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: ['bet', 'gamble'],
+      exclusiveSession: true,
     });
   }
 
@@ -45,8 +47,10 @@ class WagerCommand extends BaseCommand {
     }
 
     // Parse amount
-    const amount = parseInt(args[1]);
-    if (isNaN(amount) || amount <= 0) {
+    let amount;
+    try {
+      amount = parsePositiveAmount(args[1], 'Wager amount');
+    } catch {
       const errorEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.ERROR)
         .setTitle('❌ Invalid Amount')
@@ -75,8 +79,8 @@ class WagerCommand extends BaseCommand {
         .setTitle('❌ Insufficient Balance')
         .setDescription("You don't have enough Dih!")
         .addFields(
-          { name: 'Your Balance', value: `${userBalance} cm`, inline: true },
-          { name: 'Required', value: `${amount} cm`, inline: true }
+          { name: 'Your Balance', value: `${formatMoney(userBalance)} cm`, inline: true },
+          { name: 'Required', value: `${formatMoney(amount)} cm`, inline: true }
         );
 
       return message.reply({ embeds: [errorEmbed] });
@@ -88,8 +92,8 @@ class WagerCommand extends BaseCommand {
         .setTitle('❌ Insufficient Balance')
         .setDescription(`${targetUser.username} doesn't have enough Dih!`)
         .addFields(
-          { name: 'Their Balance', value: `${targetBalance} cm`, inline: true },
-          { name: 'Required', value: `${amount} cm`, inline: true }
+          { name: 'Their Balance', value: `${formatMoney(targetBalance)} cm`, inline: true },
+          { name: 'Required', value: `${formatMoney(amount)} cm`, inline: true }
         );
 
       return message.reply({ embeds: [errorEmbed] });
@@ -100,10 +104,10 @@ class WagerCommand extends BaseCommand {
       .setColor(CONFIG.COLORS.DEFAULT)
       .setTitle('🎲 Wager Request')
       .setDescription(
-        `${targetUser}, do you accept the wager of ${amount} cm Dih from ${message.author}?`
+        `${targetUser}, do you accept the wager of ${formatMoney(amount)} cm Dih from ${message.author}?`
       )
       .addFields(
-        { name: 'Amount', value: `${amount} cm`, inline: true },
+        { name: 'Amount', value: `${formatMoney(amount)} cm`, inline: true },
         { name: 'Challenger', value: message.author.username, inline: true }
       )
       .setFooter({ text: 'Click the buttons below to accept or decline' })
@@ -134,54 +138,63 @@ class WagerCommand extends BaseCommand {
       filter,
       time: 30000,
     });
+    let resolved = false;
 
     collector.on('collect', async (i) => {
+      if (resolved) {
+        return i.reply({
+          content: 'This wager has already been resolved.',
+          ephemeral: true,
+        });
+      }
+
       if (i.customId === 'accept') {
+        resolved = true;
         // 50% chance to win
         const userWins = Math.random() > 0.5;
+        const winnerId = userWins ? userId : targetUser.id;
+        const loserId = userWins ? targetUser.id : userId;
+        const winnerName = userWins ? message.author.username : targetUser.username;
 
-        if (userWins) {
-          await economy.updateBalance(userId, guildId, amount, 'wager-win');
-          await economy.updateBalance(targetUser.id, guildId, -amount, 'wager-loss');
-
-          const resultEmbed = new EmbedBuilder()
-            .setColor(CONFIG.COLORS.SUCCESS)
-            .setTitle('🎉 Wager Result')
-            .setDescription(`${message.author} won ${amount} cm Dih from ${targetUser}!`)
-            .addFields(
-              { name: 'Winner', value: message.author.username, inline: true },
-              { name: 'Amount Won', value: `${amount} cm`, inline: true }
-            )
-            .setTimestamp();
-
-          await i.update({ embeds: [resultEmbed], components: [] });
-        } else {
-          await economy.updateBalance(userId, guildId, -amount, 'wager-loss');
-          await economy.updateBalance(targetUser.id, guildId, amount, 'wager-win');
+        try {
+          await economy.transferBalance(loserId, winnerId, guildId, amount, 'wager');
 
           const resultEmbed = new EmbedBuilder()
             .setColor(CONFIG.COLORS.SUCCESS)
             .setTitle('🎉 Wager Result')
-            .setDescription(`${targetUser} won ${amount} cm Dih from ${message.author}!`)
+            .setDescription(`${winnerName} won ${formatMoney(amount)} cm Dih from the wager!`)
             .addFields(
-              { name: 'Winner', value: targetUser.username, inline: true },
-              { name: 'Amount Won', value: `${amount} cm`, inline: true }
+              { name: 'Winner', value: winnerName, inline: true },
+              { name: 'Amount Won', value: `${formatMoney(amount)} cm`, inline: true }
             )
             .setTimestamp();
 
           await i.update({ embeds: [resultEmbed], components: [] });
+        } catch {
+          const failedEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.ERROR)
+            .setTitle('❌ Wager Canceled')
+            .setDescription(
+              'Wager could not be settled because one player no longer has enough Dih.'
+            )
+            .setTimestamp();
+
+          await i.update({ embeds: [failedEmbed], components: [] });
         }
+        collector.stop('resolved');
       } else {
+        resolved = true;
         const declineEmbed = new EmbedBuilder()
           .setColor(CONFIG.COLORS.ERROR)
           .setTitle('❌ Wager Declined')
           .setDescription(`${targetUser} declined the wager.`);
 
         await i.update({ embeds: [declineEmbed], components: [] });
+        collector.stop('declined');
       }
     });
 
-    collector.on('end', async (collected, reason) => {
+    collector.on('end', async (_collected, reason) => {
       if (reason === 'time') {
         const timeoutEmbed = new EmbedBuilder()
           .setColor(CONFIG.COLORS.ERROR)
@@ -190,6 +203,11 @@ class WagerCommand extends BaseCommand {
 
         await wagerMessage.edit({ embeds: [timeoutEmbed], components: [] });
       }
+    });
+
+    // Keep the command session active until the collector ends
+    await new Promise((resolve) => {
+      collector.on('end', resolve);
     });
   }
 }

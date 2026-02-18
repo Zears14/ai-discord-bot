@@ -4,6 +4,7 @@ import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
 import inventoryService from '../services/inventoryService.js';
 import itemsService from '../services/itemsService.js';
+import { formatMoney, parsePositiveAmount, toBigInt } from '../utils/moneyUtils.js';
 
 class TestCommand extends BaseCommand {
   constructor(client) {
@@ -47,8 +48,9 @@ class TestCommand extends BaseCommand {
             inline: true,
           },
           {
-            name: 'resetcooldown',
-            value: '`test resetcooldown @user` - Reset user cooldown',
+            name: 'resetgrowcooldown',
+            value:
+              '`test resetgrowcooldown [@user]` - Reset grow cooldown (`resetcooldown`/`resetgrow` also work)',
             inline: true,
           }
         )
@@ -73,7 +75,7 @@ class TestCommand extends BaseCommand {
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
             .addFields(
               { name: 'User', value: targetUser.username, inline: true },
-              { name: 'Length', value: `${balance} cm`, inline: true }
+              { name: 'Length', value: `${formatMoney(balance)} cm`, inline: true }
             )
             .setFooter({ text: 'Test command result' })
             .setTimestamp();
@@ -84,7 +86,7 @@ class TestCommand extends BaseCommand {
 
         case 'grow': {
           const targetUser = message.mentions.users.first() || message.author;
-          const growth = Math.floor(Math.random() * 5) + 1;
+          const growth = BigInt(Math.floor(Math.random() * 5) + 1);
           await economy.updateBalance(targetUser.id, guildId, growth);
           const newBalance = await economy.getBalance(targetUser.id, guildId);
 
@@ -94,8 +96,8 @@ class TestCommand extends BaseCommand {
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
             .addFields(
               { name: 'User', value: targetUser.username, inline: true },
-              { name: 'Growth', value: `+${growth} cm`, inline: true },
-              { name: 'New Length', value: `${newBalance} cm`, inline: true }
+              { name: 'Growth', value: `+${formatMoney(growth)} cm`, inline: true },
+              { name: 'New Length', value: `${formatMoney(newBalance)} cm`, inline: true }
             )
             .setFooter({ text: 'Test command result' })
             .setTimestamp();
@@ -128,13 +130,22 @@ class TestCommand extends BaseCommand {
             return message.reply({ embeds: [errorEmbed] });
           }
 
-          const amount = parseInt(args[2]);
-          if (isNaN(amount) || amount < 0) {
+          let amount;
+          try {
+            amount = toBigInt(args[2], 'Amount');
+          } catch {
             const errorEmbed = new EmbedBuilder()
               .setColor(CONFIG.COLORS.ERROR)
               .setTitle('❌ Invalid Amount')
               .setDescription('Please provide a valid amount.');
 
+            return message.reply({ embeds: [errorEmbed] });
+          }
+          if (amount < 0n) {
+            const errorEmbed = new EmbedBuilder()
+              .setColor(CONFIG.COLORS.ERROR)
+              .setTitle('❌ Invalid Amount')
+              .setDescription('Please provide a non-negative amount.');
             return message.reply({ embeds: [errorEmbed] });
           }
 
@@ -147,8 +158,8 @@ class TestCommand extends BaseCommand {
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
             .addFields(
               { name: 'User', value: targetUser.username, inline: true },
-              { name: 'Old Length', value: `${oldBalance} cm`, inline: true },
-              { name: 'New Length', value: `${amount} cm`, inline: true }
+              { name: 'Old Length', value: `${formatMoney(oldBalance)} cm`, inline: true },
+              { name: 'New Length', value: `${formatMoney(amount)} cm`, inline: true }
             )
             .setFooter({ text: 'Test command result' })
             .setTimestamp();
@@ -157,16 +168,10 @@ class TestCommand extends BaseCommand {
           break;
         }
 
-        case 'resetcooldown': {
-          const targetUser = message.mentions.users.first();
-          if (!targetUser) {
-            const errorEmbed = new EmbedBuilder()
-              .setColor(CONFIG.COLORS.ERROR)
-              .setTitle('❌ Invalid User')
-              .setDescription('Please mention a valid user.');
-
-            return message.reply({ embeds: [errorEmbed] });
-          }
+        case 'resetcooldown':
+        case 'resetgrow':
+        case 'resetgrowcooldown': {
+          const targetUser = message.mentions.users.first() || message.author;
 
           await economy.updateLastGrow(targetUser.id, guildId, new Date(0));
 
@@ -194,13 +199,22 @@ class TestCommand extends BaseCommand {
             return message.reply('Please mention a user.');
           }
           const itemName = args[2];
-          const quantity = parseInt(args[3]) || 1;
+          let quantity = 1n;
+          if (args[3] !== undefined) {
+            try {
+              quantity = parsePositiveAmount(args[3], 'Quantity');
+            } catch {
+              return message.reply('Please provide a valid quantity.');
+            }
+          }
           const item = await itemsService.getItemByName(itemName);
           if (!item) {
             return message.reply(`Item "${itemName}" not found.`);
           }
           await inventoryService.addItemToInventory(targetUser.id, guildId, item.id, quantity);
-          await message.reply(`Gave ${quantity} ${item.name} to ${targetUser.username}.`);
+          await message.reply(
+            `Gave ${formatMoney(quantity)} ${item.name} to ${targetUser.username}.`
+          );
           break;
         }
 

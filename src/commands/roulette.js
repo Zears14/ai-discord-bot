@@ -7,6 +7,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
 
 // Roulette wheel configuration
 const ROULETTE_NUMBERS = [...Array(37).keys()]; // 0-36
@@ -22,6 +23,7 @@ class RouletteCommand extends BaseCommand {
       usage: 'roulette <bet_type> <amount>',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: ['roul'],
+      exclusiveSession: true,
     });
   }
 
@@ -37,17 +39,19 @@ class RouletteCommand extends BaseCommand {
     }
 
     const betType = args[0].toLowerCase();
-    const amount = parseInt(args[1]);
+    let amount;
 
     // Validate amount
-    if (isNaN(amount) || amount <= 0) {
+    try {
+      amount = parsePositiveAmount(args[1], 'Bet amount');
+    } catch {
       return message.reply('Please provide a valid amount to bet.');
     }
 
     // Check balance
     const balance = await economy.getBalance(userId, guildId);
     if (balance < amount) {
-      return message.reply(`You don't have enough Dih! Your balance: ${balance} cm`);
+      return message.reply(`You don't have enough Dih! Your balance: ${formatMoney(balance)} cm`);
     }
 
     // Validate bet type
@@ -99,21 +103,21 @@ class RouletteCommand extends BaseCommand {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     let winnings = -amount;
-    let resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You lost ${amount} cm Dih.`;
+    let resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You lost ${formatMoney(amount)} cm Dih.`;
 
     // Check for win
     if (betType === winningColor) {
       winnings = amount; // 2x payout
-      resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You won ${winnings} cm Dih!`;
+      resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You won ${formatMoney(winnings)} cm Dih!`;
     } else if (betType === 'even' && winningNumber % 2 === 0 && winningNumber !== 0) {
       winnings = amount; // 2x payout
-      resultMessage = `The ball landed on **${winningNumber}**. It's an even number! You won ${winnings} cm Dih!`;
+      resultMessage = `The ball landed on **${winningNumber}**. It's an even number! You won ${formatMoney(winnings)} cm Dih!`;
     } else if (betType === 'odd' && winningNumber % 2 !== 0) {
       winnings = amount; // 2x payout
-      resultMessage = `The ball landed on **${winningNumber}**. It's an odd number! You won ${winnings} cm Dih!`;
+      resultMessage = `The ball landed on **${winningNumber}**. It's an odd number! You won ${formatMoney(winnings)} cm Dih!`;
     } else if (parseInt(betType) === winningNumber) {
-      winnings = amount * 35; // 36x payout
-      resultMessage = `The ball landed on **${winningNumber}**. You hit the number! You won ${winnings} cm Dih!`;
+      winnings = amount * 35n; // 36x payout
+      resultMessage = `The ball landed on **${winningNumber}**. You hit the number! You won ${formatMoney(winnings)} cm Dih!`;
     }
 
     // Update balance
@@ -122,12 +126,16 @@ class RouletteCommand extends BaseCommand {
 
     // Create embed
     const embed = new EmbedBuilder()
-      .setColor(winnings > 0 ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
+      .setColor(winnings > 0n ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
       .setTitle('Roulette')
       .setDescription(resultMessage)
       .addFields(
-        { name: 'Your Bet', value: `${betType.toUpperCase()} - ${amount} cm`, inline: true },
-        { name: 'New Balance', value: `${newBalance} cm`, inline: true }
+        {
+          name: 'Your Bet',
+          value: `${betType.toUpperCase()} - ${formatMoney(amount)} cm`,
+          inline: true,
+        },
+        { name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true }
       )
       .setTimestamp();
 

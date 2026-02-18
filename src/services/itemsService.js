@@ -1,9 +1,23 @@
 import pg from 'pg';
+import './pgTypeParsers.js';
 const { Pool } = pg;
+import { toBigInt } from '../utils/moneyUtils.js';
 
 const pool = new Pool({
   connectionString: process.env.POSTGRES_URI,
 });
+
+function normalizePrice(price) {
+  if (price === undefined || price === null) {
+    return null;
+  }
+
+  const parsed = toBigInt(price, 'Item price');
+  if (parsed < 0n) {
+    throw new Error('Item price cannot be negative');
+  }
+  return parsed;
+}
 
 async function createItem(item) {
   const { name, title, type, price, data } = item;
@@ -12,14 +26,14 @@ async function createItem(item) {
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *;
     `;
-  const values = [name, title, type, price, data || {}];
+  const values = [name, title, type, normalizePrice(price), data || {}];
   const res = await pool.query(query, values);
   return res.rows[0];
 }
 
 async function getItemById(id) {
   const query = 'SELECT * FROM items WHERE id = $1;';
-  const res = await pool.query(query, [id]);
+  const res = await pool.query(query, [toBigInt(id, 'Item ID')]);
   return res.rows[0];
 }
 
@@ -44,14 +58,14 @@ async function updateItem(id, updates) {
         WHERE id = $6
         RETURNING *;
     `;
-  const values = [name, title, type, price, data, id];
+  const values = [name, title, type, normalizePrice(price), data, toBigInt(id, 'Item ID')];
   const res = await pool.query(query, values);
   return res.rows[0];
 }
 
 async function deleteItem(id) {
   const query = 'DELETE FROM items WHERE id = $1 RETURNING *;';
-  const res = await pool.query(query, [id]);
+  const res = await pool.query(query, [toBigInt(id, 'Item ID')]);
   return res.rows[0];
 }
 

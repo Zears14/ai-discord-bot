@@ -3,6 +3,7 @@ import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
 import logger from '../services/loggerService.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 class LeaderboardCommand extends BaseCommand {
   constructor(client) {
@@ -39,7 +40,7 @@ class LeaderboardCommand extends BaseCommand {
             const username = discordUser ? discordUser.username : 'Unknown User';
             return {
               name: `#${index + 1} ${username}`,
-              value: `${user.balance} cm`,
+              value: `${formatMoney(user.balance)} cm`,
               inline: false,
             };
           })

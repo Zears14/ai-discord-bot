@@ -4,6 +4,7 @@
  */
 
 import pg from 'pg';
+import './pgTypeParsers.js';
 const { Pool } = pg;
 
 const pool = new Pool({
@@ -120,9 +121,51 @@ async function incrementKey(userId, guildId, key, amount = 1) {
              VALUES ($1, $2, 0, '1970-01-01 00:00:00+00', jsonb_build_object($3, $4))
              ON CONFLICT (userid, guildid)
              DO UPDATE SET data = COALESCE(economy.data, '{}'::jsonb) || 
-                jsonb_build_object($3, COALESCE((economy.data->$3)::int, 0) + $4)`,
+                jsonb_build_object($3, COALESCE((economy.data->>$3)::bigint, 0) + $4::bigint)`,
       [userId, guildId, key, amount]
     );
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Atomically acquire a timed JSONB lock-like key for a user.
+ * This only sets the key if it is absent or expired.
+ */
+async function acquireTimedKey(userId, guildId, key, untilTimestamp, nowTimestamp = Date.now()) {
+  const client = await pool.connect();
+  try {
+    const updated = await client.query(
+      `UPDATE economy
+             SET data = jsonb_set(
+               COALESCE(data, '{}'::jsonb),
+               ARRAY[$3]::text[],
+               to_jsonb($4::bigint),
+               true
+             )
+             WHERE userid = $1
+               AND guildid = $2
+               AND COALESCE((data->>$3)::bigint, 0) <= $5::bigint
+             RETURNING $4::bigint as value`,
+      [userId, guildId, key, untilTimestamp, nowTimestamp]
+    );
+
+    if (updated.rowCount > 0) {
+      return { acquired: true, value: updated.rows[0].value };
+    }
+
+    const current = await client.query(
+      `SELECT COALESCE((data->>$3)::bigint, 0) as value
+             FROM economy
+             WHERE userid = $1 AND guildid = $2`,
+      [userId, guildId, key]
+    );
+
+    return {
+      acquired: false,
+      value: current.rowCount > 0 ? current.rows[0].value : 0n,
+    };
   } finally {
     client.release();
   }
@@ -169,6 +212,7 @@ export default {
   setKey,
   removeKey,
   incrementKey,
+  acquireTimedKey,
   hasKey,
   findByKey,
 };

@@ -4,6 +4,7 @@ import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
 import historyService from '../services/historyService.js';
 import logger from '../services/loggerService.js';
+import { bigintAbs, formatMoney } from '../utils/moneyUtils.js';
 
 class GuildStatsCommand extends BaseCommand {
   constructor(client) {
@@ -25,6 +26,10 @@ class GuildStatsCommand extends BaseCommand {
         economy.getGuildStats(guildId),
         historyService.getGuildStats(guildId),
       ]);
+      const totalGained = historyStats.total_gained ?? 0n;
+      const totalLost = historyStats.total_lost ?? 0n;
+      const netChange = totalGained + totalLost;
+      const activeEconomy = bigintAbs(totalGained) + bigintAbs(totalLost);
 
       const statsEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.DEFAULT)
@@ -32,12 +37,12 @@ class GuildStatsCommand extends BaseCommand {
         .addFields(
           // Economy stats
           {
-            name: '� Economy Overview',
+            name: '💼 Economy Overview',
             value: [
               `Total Users: ${economyStats.totalUsers}`,
-              `Total Balance: ${economyStats.totalBalance}`,
+              `Total Balance: ${formatMoney(economyStats.totalBalance)} cm`,
               `Average Balance: ${economyStats.avgBalance.toFixed(2)}`,
-              `Richest Balance: ${economyStats.maxBalance}`,
+              `Richest Balance: ${formatMoney(economyStats.maxBalance)} cm`,
             ].join('\n'),
             inline: true,
           },
@@ -45,10 +50,10 @@ class GuildStatsCommand extends BaseCommand {
           {
             name: '📈 Activity (30d)',
             value: [
-              `Active Users: ${historyStats.active_users}`,
-              `Total Games: ${historyStats.total_games}`,
-              `Money Gambled: ${historyStats.total_gambled}`,
-              `Activities: ${historyStats.unique_activities}`,
+              `Active Users: ${historyStats.active_users ?? 0n}`,
+              `Total Games: ${historyStats.total_games ?? 0n}`,
+              `Money Gambled: ${formatMoney(historyStats.total_gambled ?? 0n)} cm`,
+              `Activities: ${historyStats.unique_activities ?? 0n}`,
             ].join('\n'),
             inline: true,
           },
@@ -56,10 +61,10 @@ class GuildStatsCommand extends BaseCommand {
           {
             name: '💸 Money Flow (30d)',
             value: [
-              `Money Generated: ${historyStats.total_gained}`,
-              `Money Lost: ${historyStats.total_lost}`,
-              `Net Change: ${historyStats.total_gained + historyStats.total_lost}`,
-              `Active Economy: ${Math.abs(historyStats.total_gained) + Math.abs(historyStats.total_lost)}`,
+              `Money Generated: ${formatMoney(totalGained)} cm`,
+              `Money Lost: ${formatMoney(totalLost)} cm`,
+              `Net Change: ${formatMoney(netChange)} cm`,
+              `Active Economy: ${formatMoney(activeEconomy)} cm`,
             ].join('\n'),
             inline: true,
           }

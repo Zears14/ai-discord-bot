@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 class DailyCommand extends BaseCommand {
   constructor(client) {
@@ -18,7 +19,7 @@ class DailyCommand extends BaseCommand {
   async execute(message, _args) {
     const userId = message.author.id;
     const guildId = message.guild.id;
-    const dailyAmount = 25; // Amount to be given daily
+    const dailyAmount = 25n; // Amount to be given daily
 
     // Check cooldown
     const lastDaily = await economy.getLastDaily(userId, guildId);
@@ -50,8 +51,8 @@ class DailyCommand extends BaseCommand {
     const resultEmbed = new EmbedBuilder()
       .setColor(CONFIG.COLORS.SUCCESS)
       .setTitle('🎉 Daily Reward Claimed!')
-      .setDescription(`You have received ${dailyAmount} cm Dih!`)
-      .addFields({ name: 'New Balance', value: `${newBalance} cm`, inline: true })
+      .setDescription(`You have received ${formatMoney(dailyAmount)} cm Dih!`)
+      .addFields({ name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true })
       .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
       .setFooter({ text: 'Come back tomorrow for more!' })
       .setTimestamp();

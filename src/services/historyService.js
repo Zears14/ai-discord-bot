@@ -1,4 +1,5 @@
 import pg from 'pg';
+import './pgTypeParsers.js';
 import logger from './loggerService.js';
 const { Pool } = pg;
 
@@ -17,15 +18,16 @@ const pool = new Pool({
  * @param {number} [entry.amount] - The amount of currency involved.
  * @returns {Promise<void>}
  */
-async function addHistory(entry) {
+async function addHistory(entry, dbClient = null) {
   const { userid, guildid, type, itemid, amount } = entry;
   const query = `
         INSERT INTO history (userid, guildid, type, itemid, amount)
         VALUES ($1, $2, $3, $4, $5)
     `;
-  const values = [userid, guildid, type, itemid || null, amount || 0];
+  const values = [userid, guildid, type, itemid ?? null, amount ?? 0n];
   try {
-    await pool.query(query, values);
+    const queryClient = dbClient || pool;
+    await queryClient.query(query, values);
   } catch (error) {
     logger.discord.dbError('Error adding history:', error);
     throw error;
@@ -159,7 +161,7 @@ async function searchHistory(criteria) {
     paramIndex++;
   }
 
-  if (criteria.itemid) {
+  if (criteria.itemid !== undefined && criteria.itemid !== null) {
     conditions.push(`itemid = $${paramIndex}`);
     values.push(criteria.itemid);
     paramIndex++;

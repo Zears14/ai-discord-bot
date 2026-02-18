@@ -5,6 +5,7 @@ import economy from '../services/economy.js';
 import historyService from '../services/historyService.js';
 import inventoryService from '../services/inventoryService.js';
 import logger from '../services/loggerService.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 class ProfileCommand extends BaseCommand {
   constructor(client) {
@@ -27,9 +28,9 @@ class ProfileCommand extends BaseCommand {
       const lastGrowTime = userData.lastGrow;
 
       // Calculate inventory worth
-      let inventoryWorth = 0;
+      let inventoryWorth = 0n;
       for (const item of inventory) {
-        if (item.price) {
+        if (item.price !== null) {
           inventoryWorth += item.price * item.quantity;
         }
       }
@@ -42,23 +43,27 @@ class ProfileCommand extends BaseCommand {
         .setTitle(`${target.username}'s Profile`)
         .setThumbnail(target.displayAvatarURL({ dynamic: true }))
         .addFields(
-          { name: '💰 Balance', value: userData.balance.toString(), inline: true },
-          { name: '🎒 Inventory Worth', value: inventoryWorth.toString(), inline: true },
+          { name: '💰 Balance', value: `${formatMoney(userData.balance)} cm`, inline: true },
+          { name: '🎒 Inventory Worth', value: `${formatMoney(inventoryWorth)} cm`, inline: true },
           {
             name: '💎 Net Worth',
-            value: (userData.balance + inventoryWorth).toString(),
+            value: `${formatMoney(userData.balance + inventoryWorth)} cm`,
             inline: true,
           },
-          { name: '🎰 Total Gambled', value: stats.total_gambled?.toString() || '0', inline: true },
-          { name: '🎲 Games Played', value: stats.games_played?.toString() || '0', inline: true },
+          {
+            name: '🎰 Total Gambled',
+            value: `${formatMoney(stats.total_gambled ?? 0n)} cm`,
+            inline: true,
+          },
+          { name: '🎲 Games Played', value: `${stats.games_played ?? 0n}`, inline: true },
           {
             name: '📈 Gambling Stats',
-            value: `Won: ${stats.total_won || 0}\nLost: ${stats.total_lost || 0}`,
+            value: `Won: ${formatMoney(stats.total_won ?? 0n)} cm\nLost: ${formatMoney(stats.total_lost ?? 0n)} cm`,
             inline: true,
           },
           {
             name: '🌟 Earnings',
-            value: `Claimed: ${stats.total_earned || 0}\nDaily: ${stats.daily_claims || 0}\nGrow: ${stats.grow_claims || 0}`,
+            value: `Claimed: ${formatMoney(stats.total_earned ?? 0n)} cm\nDaily: ${stats.daily_claims ?? 0n}\nGrow: ${stats.grow_claims ?? 0n}`,
             inline: true,
           },
           {

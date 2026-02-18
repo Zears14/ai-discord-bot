@@ -3,6 +3,7 @@ import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import inventoryService from '../services/inventoryService.js';
 import itemsService from '../services/itemsService.js';
+import { parsePositiveAmount } from '../utils/moneyUtils.js';
 
 class UseCommand extends BaseCommand {
   constructor(client) {
@@ -20,14 +21,18 @@ class UseCommand extends BaseCommand {
     const userId = message.author.id;
     const guildId = message.guild.id;
     const itemName = args[0];
-    const quantity = parseInt(args[1]) || 1;
+    let quantity = 1n;
 
     if (!itemName) {
       return message.reply('Please specify an item to use.');
     }
 
-    if (quantity <= 0) {
-      return message.reply('Please specify a valid quantity.');
+    if (args[1] !== undefined) {
+      try {
+        quantity = parsePositiveAmount(args[1], 'Quantity');
+      } catch {
+        return message.reply('Please specify a valid quantity.');
+      }
     }
 
     const item = await itemsService.getItemByName(itemName);
