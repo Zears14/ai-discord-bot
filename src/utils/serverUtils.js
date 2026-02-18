@@ -2,6 +2,7 @@
  * @fileoverview Utility functions for server information
  * @module utils/serverUtils
  */
+import logger from '../services/loggerService.js';
 
 /**
  * Gets server information for AI context
@@ -23,41 +24,39 @@ async function getServerInfo(message) {
 
     try {
       // Check if we need to fetch members (for large guilds)
-      const shouldFetchMembers = message.guild.memberCount > 50 &&
-        message.guild.members.cache.size < 50;
+      const shouldFetchMembers =
+        message.guild.memberCount > 50 && message.guild.members.cache.size < 50;
 
       if (shouldFetchMembers) {
         try {
           // Try to fetch more members, but don't fail if it doesn't work
-          await message.guild.members.fetch({ limit: 100 })
-            .catch(err => console.warn(`Couldn't fetch members: ${err.message}`));
+          await message.guild.members
+            .fetch({ limit: 100 })
+            .catch((err) => logger.warn(`Couldn't fetch members: ${err.message}`));
         } catch (err) {
-          console.warn(`Error fetching guild members: ${err.message}`);
+          logger.warn(`Error fetching guild members: ${err.message}`);
         }
       }
 
-      memberCount = message.guild.members.cache.filter(m => !m.user.bot).size;
+      memberCount = message.guild.members.cache.filter((m) => !m.user.bot).size;
 
       // Get online members with a reasonable limit
       onlineMemberUsernames = message.guild.members.cache
-        .filter(m => !m.user.bot && m.presence?.status !== 'offline')
-        .map(m => m.user.username)
+        .filter((m) => !m.user.bot && m.presence?.status !== 'offline')
+        .map((m) => m.user.username)
         .slice(0, 20); // Limit to avoid huge messages
-
     } catch (err) {
-      console.warn(`Error processing guild members: ${err.message}`);
+      logger.warn(`Error processing guild members: ${err.message}`);
       memberCount = message.guild.memberCount; // Fallback
       onlineMemberUsernames = [message.author.username]; // Fallback
     }
 
     return [message.author.username, serverName, memberCount, onlineMemberUsernames];
   } catch (error) {
-    console.error('Error getting server info:', error);
+    logger.discord.error('Error getting server info:', error);
     // Fallback to minimal info in case of errors
     return [message.author.username, 'Unknown Server', 1, [message.author.username]];
   }
 }
 
-module.exports = {
-  getServerInfo
-}; 
+export { getServerInfo };

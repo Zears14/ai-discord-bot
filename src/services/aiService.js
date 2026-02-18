@@ -2,14 +2,15 @@
  * @fileoverview AI service for text and image analysis
  * @module services/aiService
  */
-const { GoogleGenAI } = require('@google/genai');
-const CONFIG = require('../config/config');
+import { GoogleGenAI } from '@google/genai';
+import logger from './loggerService.js';
+import CONFIG from '../config/config.js';
 // Initialize Google Generative AI client
 let genAI;
 try {
   genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 } catch (error) {
-  console.error('Failed to initialize Google Generative AI client:', error);
+  logger.discord.apiError('Failed to initialize Google Generative AI client:', error);
   process.exit(1);
 }
 
@@ -21,7 +22,13 @@ try {
  * @param {string[]} onlineMemberUsernames - List of online member usernames
  * @returns {string} System prompt
  */
-function createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames, history = null) {
+function createSystemPrompt(
+  username,
+  serverName,
+  memberCount,
+  onlineMemberUsernames,
+  history = null
+) {
   const historyPrompt = history ? `Here is the recent chat history:\n${history}\n` : '';
   return `${CONFIG.AI.AI.SYSTEM_PROMPT}
   ${historyPrompt}
@@ -29,7 +36,7 @@ function createSystemPrompt(username, serverName, memberCount, onlineMemberUsern
   The current Discord server is called: ${serverName}.
   This server has ${memberCount} human members.
   ${onlineMemberUsernames.length > 0 ? `The usernames of some online human members in this server are: ${onlineMemberUsernames.slice(0, 10).join(', ')}${onlineMemberUsernames.length > 10 ? '...' : ''}.` : ''}
-  The following text is the user question:`
+  The following text is the user question:`;
 }
 
 /**
@@ -42,20 +49,35 @@ function createSystemPrompt(username, serverName, memberCount, onlineMemberUsern
  * @param {string} history - Conversation history
  * @returns {Promise<string>} AI response
  */
-async function generateTextResponse(userPrompt, username, serverName, memberCount, onlineMemberUsernames, history = null) {
+async function generateTextResponse(
+  userPrompt,
+  username,
+  serverName,
+  memberCount,
+  onlineMemberUsernames,
+  history = null
+) {
   try {
     if (genAI === undefined) {
       genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
     }
-    const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames, history);
+    const systemPrompt = createSystemPrompt(
+      username,
+      serverName,
+      memberCount,
+      onlineMemberUsernames,
+      history
+    );
     const fullPrompt = systemPrompt + userPrompt;
     const response = await genAI.models.generateContent({
       model: CONFIG.AI.MODELS.GEMMA,
       contents: fullPrompt,
       config: {
-        maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS
-      }
+        maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS,
+      },
     });
+
+    logger.discord.api('AI response:', response);
 
     if (response.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
       return CONFIG.MESSAGE.ERROR_FALLBACK;
@@ -63,10 +85,12 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
 
     return response.text;
   } catch (error) {
-    console.error('Error generating text response:', error);
-    if (error.message?.includes("safety") ||
-      error.message?.includes("blocked") ||
-      error.message?.includes("policy")) {
+    logger.discord.apiError('Error generating text response:', error);
+    if (
+      error.message?.includes('safety') ||
+      error.message?.includes('blocked') ||
+      error.message?.includes('policy')
+    ) {
       return CONFIG.MESSAGE.ERROR_FALLBACK;
     }
     throw new Error(`AI generation error: ${error.message || 'Unknown error'}`);
@@ -85,16 +109,35 @@ async function generateTextResponse(userPrompt, username, serverName, memberCoun
  * @param {string} history - Conversation history
  * @returns {Promise<string>} AI response
  */
-async function generateImageResponse(userPrompt, imageUrl, mimeType, username, serverName, memberCount, onlineMemberUsernames, history = null) {
+async function generateImageResponse(
+  userPrompt,
+  imageUrl,
+  mimeType,
+  username,
+  serverName,
+  memberCount,
+  onlineMemberUsernames,
+  history = null
+) {
   try {
     if (genAI === undefined) {
       genAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
     }
-    const systemPrompt = createSystemPrompt(username, serverName, memberCount, onlineMemberUsernames, history);
-
+    const systemPrompt = createSystemPrompt(
+      username,
+      serverName,
+      memberCount,
+      onlineMemberUsernames,
+      history
+    );
 
     // Fetch image with timeout and retry logic
-    const fetchWithTimeout = async (url, options = {}, retries = CONFIG.AI.IMAGE.MAX_RETRIES, timeout = CONFIG.AI.IMAGE.FETCH_TIMEOUT) => {
+    const fetchWithTimeout = async (
+      url,
+      options = {},
+      retries = CONFIG.AI.IMAGE.MAX_RETRIES,
+      timeout = CONFIG.AI.IMAGE.FETCH_TIMEOUT
+    ) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -105,7 +148,7 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
       } catch (error) {
         clearTimeout(timeoutId);
         if (retries > 0) {
-          console.log(`Retrying image fetch (${retries} attempts left)`);
+          logger.discord.api(`Retrying image fetch (${retries} attempts left)`);
           return fetchWithTimeout(url, options, retries - 1, timeout);
         }
         throw error;
@@ -130,25 +173,22 @@ async function generateImageResponse(userPrompt, imageUrl, mimeType, username, s
             data: base64ImageData,
           },
         },
-        { text: systemPrompt + userPrompt }
+        { text: systemPrompt + userPrompt },
       ],
       config: {
-        maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS
-      }
+        maxOutputTokens: CONFIG.AI.MAX_OUTPUT_TOKENS,
+      },
     });
 
-    if (response.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
+    if (result.candidates[0].finishReason === 'PROHIBITED_CONTENT') {
       return CONFIG.MESSAGE.ERROR_FALLBACK;
     }
 
-    return response.text;
+    return result.text;
   } catch (error) {
-    console.error('Error generating image response:', error);
+    logger.discord.apiError('Error generating image response:', error);
     throw new Error(`Image analysis error: ${error.message || 'Unknown error'}`);
   }
 }
 
-module.exports = {
-  generateTextResponse,
-  generateImageResponse
-}; 
+export { generateTextResponse, generateImageResponse };

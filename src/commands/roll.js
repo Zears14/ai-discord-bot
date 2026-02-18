@@ -3,9 +3,9 @@
  * @module commands/roll
  */
 
-const BaseCommand = require('./BaseCommand');
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import { EmbedBuilder } from 'discord.js';
+import BaseCommand from './BaseCommand.js';
+import CONFIG from '../config/config.js';
 
 class RollCommand extends BaseCommand {
   constructor(client) {
@@ -15,13 +15,13 @@ class RollCommand extends BaseCommand {
       category: 'Fun',
       usage: 'roll [number of dice]d[sides]',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
-      aliases: ['dice', 'd']
+      aliases: ['dice', 'd'],
     });
   }
 
   // Format large numbers with commas
   formatNumber(num) {
-    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
   // Safe random number generation for large numbers
@@ -33,13 +33,13 @@ class RollCommand extends BaseCommand {
 
     // For very large numbers, we'll use a different approach
     const maxDigits = max.toString().length;
-    const randomDigits = Array.from({ length: maxDigits }, () => 
+    const randomDigits = Array.from({ length: maxDigits }, () =>
       Math.floor(Math.random() * 10)
     ).join('');
-    
+
     const randomNum = BigInt(randomDigits);
     const maxNum = BigInt(max);
-    
+
     // If the random number is too large, we'll take modulo
     return Number((randomNum % maxNum) + 1n);
   }
@@ -49,7 +49,9 @@ class RollCommand extends BaseCommand {
     const match = input.match(/^(\d+)?d(\d+)$/i);
 
     if (!match) {
-      return message.reply('Invalid format! Use `[number of dice]d[sides]`\nExamples: `$roll 2d6` or `$roll d20`');
+      return message.reply(
+        'Invalid format! Use `[number of dice]d[sides]`\nExamples: `$roll 2d6` or `$roll d20`'
+      );
     }
 
     const [, numDice = '1', sides] = match;
@@ -65,9 +67,7 @@ class RollCommand extends BaseCommand {
     }
 
     // Generate rolls
-    const rolls = Array.from({ length: numDiceInt }, () => 
-      this.safeRandom(sidesInt)
-    );
+    const rolls = Array.from({ length: numDiceInt }, () => this.safeRandom(sidesInt));
 
     // Calculate total
     const total = rolls.reduce((sum, roll) => sum + roll, 0);
@@ -75,7 +75,7 @@ class RollCommand extends BaseCommand {
     const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
 
     // Format the output
-    const formattedRolls = rolls.map(roll => this.formatNumber(roll));
+    const formattedRolls = rolls.map((roll) => this.formatNumber(roll));
     const formattedTotal = this.formatNumber(total);
     const formattedSides = this.formatNumber(sidesInt);
 
@@ -87,11 +87,14 @@ class RollCommand extends BaseCommand {
         { name: 'Rolls', value: formattedRolls.join(', ') },
         { name: 'Total', value: formattedTotal }
       )
-      .setFooter({ text: `Rolled by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .setFooter({
+        text: `Rolled by ${message.author.tag}`,
+        iconURL: message.author.displayAvatarURL(),
+      })
       .setTimestamp();
 
     await message.reply({ embeds: [embed] });
   }
 }
 
-module.exports = RollCommand; 
+export default RollCommand;

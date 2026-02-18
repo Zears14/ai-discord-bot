@@ -2,8 +2,7 @@
  * @fileoverview Image generation service
  * @module services/imageService
  */
-
-const CONFIG = require('../config/config');
+import logger from './loggerService.js';
 
 /**
  * Generates an image using the image generation API
@@ -29,10 +28,10 @@ async function generateImage(prompt, negative_prompt = null) {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -42,14 +41,10 @@ async function generateImage(prompt, negative_prompt = null) {
 
     const imageBuffer = await response.arrayBuffer();
     return Buffer.from(imageBuffer);
-
   } catch (error) {
-    console.error('Error generating image with Cloudflare AI:', error);
+    logger.discord.apiError('Error generating image with Cloudflare AI:', error);
     throw new Error(`Image generation failed: ${error.message || 'Unknown error'}`);
   }
 }
 
-module.exports = {
-  generateImage
-};
- 
+export { generateImage };

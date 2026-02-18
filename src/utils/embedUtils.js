@@ -3,8 +3,9 @@
  * @module utils/embedUtils
  */
 
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
+import logger from '../services/loggerService.js';
 
 /**
  * Creates a loading embed for AI or image generation
@@ -15,17 +16,17 @@ const CONFIG = require('../config/config');
  */
 function createLoadingEmbed(type, message, client) {
   const embedData = {
-    'ai': {
+    ai: {
       color: CONFIG.COLORS.AI_LOADING,
       title: CONFIG.EMBED.AI_TITLE,
-      description: CONFIG.EMBED.AI_LOADING
+      description: CONFIG.EMBED.AI_LOADING,
     },
-    'image': {
+    image: {
       color: CONFIG.COLORS.IMAGE_LOADING,
       title: CONFIG.EMBED.IMAGE_TITLE,
       description: `Generating image for: "${message.content.slice(message.content.indexOf(' ') + 1).trim()}"`,
-      thumbnail: client.user.displayAvatarURL()
-    }
+      thumbnail: client.user.displayAvatarURL(),
+    },
   };
 
   const data = embedData[type];
@@ -34,7 +35,10 @@ function createLoadingEmbed(type, message, client) {
     .setColor(data.color)
     .setAuthor({ name: data.title, iconURL: client.user.displayAvatarURL() })
     .setDescription(data.description)
-    .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+    .setFooter({
+      text: `Requested by ${message.author.tag}`,
+      iconURL: message.author.displayAvatarURL(),
+    })
     .setTimestamp();
 }
 
@@ -47,14 +51,18 @@ function createLoadingEmbed(type, message, client) {
  */
 function createResponseEmbed(responseText, message, client) {
   const length = responseText.length ?? 0;
-  const sanitizedText =  length > CONFIG.MESSAGE.SIZE_LIMIT
-    ? responseText.substring(0, CONFIG.MESSAGE.SIZE_LIMIT) + '...'
-    : responseText;
+  const sanitizedText =
+    length > CONFIG.MESSAGE.SIZE_LIMIT
+      ? responseText.substring(0, CONFIG.MESSAGE.SIZE_LIMIT) + '...'
+      : responseText;
 
   return new EmbedBuilder()
     .setColor(CONFIG.COLORS.AI_RESPONSE)
     .setAuthor({ name: CONFIG.EMBED.AI_TITLE, iconURL: client.user.displayAvatarURL() })
-    .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+    .setFooter({
+      text: `Requested by ${message.author.tag}`,
+      iconURL: message.author.displayAvatarURL(),
+    })
     .setTimestamp()
     .setDescription(sanitizedText);
 }
@@ -71,16 +79,16 @@ function createErrorEmbed(type, error, message, client) {
   const errorMessage = error?.message || error?.toString() || 'Unknown error';
 
   const embedData = {
-    'ai': {
+    ai: {
       color: CONFIG.COLORS.ERROR,
       title: CONFIG.EMBED.AI_TITLE,
-      description: CONFIG.EMBED.ERROR_AI
+      description: CONFIG.EMBED.ERROR_AI,
     },
-    'image': {
+    image: {
       color: CONFIG.COLORS.ERROR,
       title: CONFIG.EMBED.IMAGE_TITLE,
-      description: `${CONFIG.EMBED.ERROR_IMAGE_PREFIX}${errorMessage}`
-    }
+      description: `${CONFIG.EMBED.ERROR_IMAGE_PREFIX}${errorMessage}`,
+    },
   };
 
   const data = embedData[type];
@@ -89,7 +97,10 @@ function createErrorEmbed(type, error, message, client) {
     .setColor(data.color)
     .setAuthor({ name: data.title, iconURL: client.user.displayAvatarURL() })
     .setDescription(data.description)
-    .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+    .setFooter({
+      text: `Requested by ${message.author.tag}`,
+      iconURL: message.author.displayAvatarURL(),
+    })
     .setTimestamp();
 }
 
@@ -108,8 +119,14 @@ async function sendLongResponse(responseText, message, firstMessageEmbed) {
     // If response exceeds the limit, send additional parts
     if (responseText.length > CONFIG.MESSAGE.SIZE_LIMIT) {
       const chunks = [];
-      for (let i = CONFIG.MESSAGE.SIZE_LIMIT; i < responseText.length; i += CONFIG.MESSAGE.SIZE_LIMIT) {
-        chunks.push(responseText.substring(i, Math.min(responseText.length, i + CONFIG.MESSAGE.SIZE_LIMIT)));
+      for (
+        let i = CONFIG.MESSAGE.SIZE_LIMIT;
+        i < responseText.length;
+        i += CONFIG.MESSAGE.SIZE_LIMIT
+      ) {
+        chunks.push(
+          responseText.substring(i, Math.min(responseText.length, i + CONFIG.MESSAGE.SIZE_LIMIT))
+        );
       }
 
       for (let i = 0; i < chunks.length; i++) {
@@ -118,20 +135,15 @@ async function sendLongResponse(responseText, message, firstMessageEmbed) {
           .setDescription(chunks[i])
           .setFooter({
             text: `Part ${i + 2}/${chunks.length + 1} • Requested by ${message.author.tag}`,
-            iconURL: message.author.displayAvatarURL()
+            iconURL: message.author.displayAvatarURL(),
           });
         await message.channel.send({ embeds: [additionalEmbed] });
       }
     }
   } catch (error) {
-    console.error('Error sending long response:', error);
+    logger.discord.error('Error sending long response:', error);
     throw new Error('Failed to send complete response');
   }
 }
 
-module.exports = {
-  createLoadingEmbed,
-  createResponseEmbed,
-  createErrorEmbed,
-  sendLongResponse
-}; 
+export { createLoadingEmbed, createResponseEmbed, createErrorEmbed, sendLongResponse };

@@ -3,29 +3,33 @@
  * @module utils/errorHandler
  */
 
-const { EmbedBuilder } = require('discord.js');
-const CONFIG = require('../config/config');
+import { EmbedBuilder } from 'discord.js';
+import CONFIG from '../config/config.js';
+import logger from '../services/loggerService.js';
 
 class ErrorHandler {
   static async handle(error, message, command = null) {
-    console.error(`Error in ${command ? command.name : 'unknown command'}:`, error);
+    logger.discord.cmdError(`Error in ${command ? command.name : 'unknown command'}:`, error);
 
     // Create error embed
     const embed = new EmbedBuilder()
       .setColor(CONFIG.COLORS.ERROR)
       .setTitle('❌ Error')
       .setDescription(this.getErrorMessage(error))
-      .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+      .setFooter({
+        text: `Requested by ${message.author.tag}`,
+        iconURL: message.author.displayAvatarURL(),
+      })
       .setTimestamp();
 
     try {
       await message.reply({ embeds: [embed] });
     } catch (replyError) {
-      console.error('Failed to send error message:', replyError);
+      logger.discord.error('Failed to send error message:', replyError);
       try {
         await message.channel.send('An error occurred while processing your command.');
       } catch (fallbackError) {
-        console.error('Failed to send fallback error message:', fallbackError);
+        logger.discord.error('Failed to send fallback error message:', fallbackError);
       }
     }
   }
@@ -35,11 +39,11 @@ class ErrorHandler {
     if (error.name === 'DiscordAPIError') {
       switch (error.code) {
         case 50013:
-          return 'I don\'t have permission to do that!';
+          return "I don't have permission to do that!";
         case 50001:
-          return 'I can\'t access that channel!';
+          return "I can't access that channel!";
         case 50005:
-          return 'I can\'t send messages in that channel!';
+          return "I can't send messages in that channel!";
         default:
           return `Discord API Error: ${error.message}`;
       }
@@ -63,19 +67,18 @@ class ErrorHandler {
   }
 
   static async handleUncaughtException(error) {
-    console.error('Uncaught Exception:', error);
+    logger.error('Uncaught Exception:', error);
     // Here you could add additional error reporting services
     process.exit(1);
   }
 
   static async handleUnhandledRejection(reason, promise) {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
     // Here you could add additional error reporting services
   }
 }
 
-// Set up global error handlers
 process.on('uncaughtException', ErrorHandler.handleUncaughtException);
 process.on('unhandledRejection', ErrorHandler.handleUnhandledRejection);
 
-module.exports = ErrorHandler; 
+export default ErrorHandler;

@@ -2,14 +2,12 @@
  * @fileoverview Configuration settings for the Discord bot
  * @module config/config
  */
-
-const { Colors } = require('discord.js');
-const botConfig = require('./bot');
-const aiConfig = require('./ai');
-const embedConfig = require('./embed');
-const commandsConfig = require('./commands.config');
-const imageConfig = require('./image');
-const economyConfig = require('./economy');
+import aiConfig from './ai/config.js';
+import botConfig from './bot/config.js';
+import commandsConfig from './commands.config.js';
+import economyConfig from './economy/config.js';
+import embedConfig from './embed/config.js';
+import imageConfig from './image/config.js';
 
 /**
  * @constant {Object} CONFIG - Main configuration object
@@ -20,7 +18,7 @@ const CONFIG = {
 
   // Bot information
   BOT: {
-    VERSION: botConfig.BOT.VERSION
+    VERSION: botConfig.BOT.VERSION,
   },
 
   // AI models and settings
@@ -37,7 +35,7 @@ const CONFIG = {
     PORT: botConfig.SERVER.PORT,
     HEALTH_MESSAGE: botConfig.SERVER.HEALTH_MESSAGE,
     getInstance: botConfig.SERVER.getInstance,
-    setInstance: botConfig.SERVER.setInstance
+    setInstance: botConfig.SERVER.setInstance,
   },
 
   // Discord embed colors
@@ -52,12 +50,12 @@ const CONFIG = {
 
   // Admin settings
   ADMIN: {
-    ID: '745984199588315216'
+    ID: '745984199588315216',
   },
 
   // Server management (top-level for backward compatibility)
   getServer: () => CONFIG.SERVER.getInstance(),
-  setServer: (server) => CONFIG.SERVER.setInstance(server)
+  setServer: (server) => CONFIG.SERVER.setInstance(server),
 };
 
-module.exports = CONFIG; 
+export default CONFIG;

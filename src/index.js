@@ -3,29 +3,33 @@
  * @module index
  */
 
-require('dotenv').config();
-const { Client, GatewayIntentBits, ActivityType } = require('discord.js');
-const express = require('express');
-const CommandHandler = require('./handlers/CommandHandler');
-const CONFIG = require('./config/config');
-
+import 'dotenv/config';
+// eslint-disable-next-line import/no-unresolved
+import Bun from 'bun'; // Using Bun's native HTTP server
+import { Client, GatewayIntentBits, ActivityType } from 'discord.js';
+import CONFIG from './config/config.js';
+import CommandHandler from './handlers/CommandHandler.js';
+import ItemHandler from './handlers/ItemHandler.js';
+import economyService from './services/economy.js';
+import inventoryService from './services/inventoryService.js';
+import logger from './services/loggerService.js';
 // Global error handler
 process.on('unhandledRejection', (error) => {
-  console.error('Unhandled promise rejection:', error);
+  logger.discord.error('Unhandled promise rejection:', error);
 });
 
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught exception:', error);
+  logger.discord.error('Uncaught exception:', error);
   // Attempt graceful shutdown
   gracefulShutdown();
 });
 
 // Memory leak detection
-const memoryUsageThreshold = 1024 * 1024 * 512; // 512MB
+const memoryUsageThreshold = 1024 * 1024 * 1024 * 2; // 2GB
 setInterval(() => {
   const memoryUsage = process.memoryUsage();
   if (memoryUsage.heapUsed > memoryUsageThreshold) {
-    console.warn('High memory usage detected:', memoryUsage);
+    logger.warn('High memory usage detected:', memoryUsage);
     global.gc && global.gc(); // Trigger garbage collection if --expose-gc flag is set
   }
 }, 300000); // Check every 5 minutes
@@ -35,8 +39,15 @@ setInterval(() => {
  * @throws {Error} If required environment variables are missing
  */
 function validateEnvironment() {
-  const requiredEnvVars = ['DISCORD_TOKEN', 'GOOGLE_API_KEY', 'IMAGEROUTER_API_KEY'];
-  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+  const requiredEnvVars = [
+    'DISCORD_TOKEN',
+    'GOOGLE_API_KEY',
+    'POSTGRES_URI',
+    'CLOUDFLARE_ACCOUNT_ID',
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_ACCOUNT_ID',
+  ];
+  const missingVars = requiredEnvVars.filter((varName) => !process.env[varName]);
 
   if (missingVars.length > 0) {
     throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
@@ -44,73 +55,89 @@ function validateEnvironment() {
 }
 
 /**
- * Sets up the health check server with optimized settings
- * @returns {Promise<http.Server>} Express server instance
+ * Sets up the health check server using Bun's native HTTP server
+ * @returns {Promise<Server>} Bun server instance
  */
 function setupHealthServer() {
-  const app = express();
   const port = CONFIG.SERVER.PORT;
-
-  // Optimize Express settings
-  app.disable('x-powered-by');
-  app.enable('trust proxy');
-  app.set('etag', 'strong');
-
-  // Health check endpoint with caching
-  app.get('/', (req, res) => {
-    res.set('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
-    res.send(CONFIG.SERVER.HEALTH_MESSAGE);
-  });
-
-  // Health status endpoint with detailed metrics
-  app.get('/health', (req, res) => {
-    const healthData = {
-      status: 'ok',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-      memory: process.memoryUsage(),
-      cpu: process.cpuUsage()
-    };
-    res.status(200).json(healthData);
-  });
-
-  // Stats endpoint with rate limiting
   const statsCache = new Map();
   const CACHE_DURATION = 60000; // 1 minute
 
-  app.get('/stats', (req, res) => {
-    const now = Date.now();
-    const cachedStats = statsCache.get('stats');
-    
-    if (cachedStats && now - cachedStats.timestamp < CACHE_DURATION) {
-      return res.status(200).json(cachedStats.data);
-    }
+  return new Promise((resolve) => {
+    const server = Bun.serve({
+      port: port,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const headers = {
+          Server: 'Dih Bot Health Server',
+        };
 
-    const stats = {
-      guilds: client.guilds.cache.size,
-      users: client.users.cache.size,
-      memory: process.memoryUsage(),
-      timestamp: now
-    };
+        // Root health check endpoint
+        if (url.pathname === '/') {
+          headers['Cache-Control'] = 'public, max-age=300';
+          return new Response(CONFIG.SERVER.HEALTH_MESSAGE, {
+            headers,
+          });
+        }
 
-    statsCache.set('stats', { data: stats, timestamp: now });
-    res.status(200).json(stats);
-  });
+        // Detailed health status endpoint
+        if (url.pathname === '/health') {
+          const healthData = {
+            status: 'ok',
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString(),
+            memory: process.memoryUsage(),
+            cpu: process.cpuUsage(),
+          };
 
-  return new Promise((resolve, reject) => {
-    const server = app.listen(port, () => {
-      console.log(`Health check server listening on port ${port}`);
-      resolve(server);
+          return Response.json(healthData, {
+            headers,
+          });
+        }
+
+        // Stats endpoint with caching
+        if (url.pathname === '/stats') {
+          const now = Date.now();
+          const cachedStats = statsCache.get('stats');
+
+          if (cachedStats && now - cachedStats.timestamp < CACHE_DURATION) {
+            return Response.json(cachedStats.data, {
+              headers,
+            });
+          }
+
+          const stats = {
+            guilds: client.guilds.cache.size,
+            users: client.users.cache.size,
+            memory: process.memoryUsage(),
+            timestamp: now,
+          };
+
+          statsCache.set('stats', { data: stats, timestamp: now });
+          return Response.json(stats, {
+            headers,
+          });
+        }
+
+        // 404 for unknown routes
+        return new Response('Not Found', {
+          status: 404,
+          headers,
+        });
+      },
+      error(error) {
+        logger.error('Health server error:', error);
+        return new Response('Internal Server Error', {
+          status: 500,
+          headers: {
+            Server: 'Dih Bot Health Server',
+          },
+        });
+      },
     });
 
-    server.on('error', (error) => {
-      console.error(`Failed to start health check server: ${error.message}`);
-      reject(error);
-    });
-
-    // Optimize server settings
-    server.keepAliveTimeout = 65000; // Slightly higher than default 60s
-    server.headersTimeout = 66000; // Slightly higher than keepAliveTimeout
+    logger.info(`Health check server listening on port ${port}`);
+    resolve(server);
   });
 }
 
@@ -120,35 +147,42 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildPresences
+    GatewayIntentBits.GuildPresences,
   ],
   failIfNotExists: false,
   allowedMentions: { parse: ['users'] },
   restTimeOffset: 0,
   restRequestTimeout: 30000,
-  retryLimit: 3
+  retryLimit: 3,
 });
 
 // Initialize command handler
 const commandHandler = new CommandHandler(client);
 client.commandHandler = commandHandler;
+const itemHandler = new ItemHandler();
+inventoryService.init(itemHandler);
 
 // Discord event handlers with optimized error handling
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   try {
-    console.log(`Logged in as ${client.user.tag}!`);
-    console.log(`Bot is in ${client.guilds.cache.size} guilds`);
+    logger.discord.ready(`Logged in as ${client.user.tag}!`);
+    logger.discord.ready(`Bot is in ${client.guilds.cache.size} guilds`);
 
     // Set status with optimized activity
-    await client.user.setActivity('$help for commands', { 
+    await client.user.setActivity('$help for commands', {
       type: ActivityType.Listening,
-      shardId: client.shard?.id
+      shardId: client.shard?.id,
     });
 
     // Load commands
     await commandHandler.loadCommands();
+
+    // Load items
+    await itemHandler.loadItems();
+
+    logger.discord.ready('Bot is ready!');
   } catch (error) {
-    console.error('Error in ready event:', error);
+    logger.discord.error('Error in ready event:', error);
   }
 });
 
@@ -171,7 +205,7 @@ client.on('messageCreate', async (message) => {
     try {
       await commandHandler.handleMessage(message);
     } catch (error) {
-      console.error('Error handling message:', error);
+      logger.discord.cmdError('Error handling message:', error);
     }
   }, MESSAGE_QUEUE_TIMEOUT);
 
@@ -179,20 +213,20 @@ client.on('messageCreate', async (message) => {
 });
 
 // Enhanced error handling for Discord events
-client.on('error', error => {
-  console.error('Discord client error:', error);
+client.on('error', (error) => {
+  logger.discord.error('Discord client error:', error);
   // Attempt to recover from error
   if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
     client.ws.reconnect();
   }
 });
 
-client.on('warn', warning => {
-  console.warn('Discord client warning:', warning);
+client.on('warn', (warning) => {
+  logger.warn('Discord client warning:', warning);
 });
 
 client.on('disconnect', () => {
-  console.warn('Bot disconnected from Discord!');
+  logger.discord.disconnect('Bot disconnected from Discord!');
   // Attempt to reconnect
   setTimeout(() => {
     client.ws.reconnect();
@@ -200,29 +234,29 @@ client.on('disconnect', () => {
 });
 
 client.on('reconnecting', () => {
-  console.log('Bot reconnecting to Discord...');
+  logger.discord.connect('Bot reconnecting to Discord...');
 });
 
 /**
  * Graceful shutdown function
  */
 async function gracefulShutdown() {
-  console.log('Initiating graceful shutdown...');
-  
+  logger.discord.disconnect('Initiating graceful shutdown...');
+
   try {
     // Close Discord connection
     await client.destroy();
-    
+
     // Close health server
     const server = CONFIG.getServer();
     if (server) {
       await new Promise((resolve) => server.close(resolve));
     }
-    
-    console.log('Graceful shutdown complete');
+
+    logger.discord.disconnect('Graceful shutdown complete');
     process.exit(0);
   } catch (error) {
-    console.error('Error during graceful shutdown:', error);
+    logger.discord.error('Error during graceful shutdown:', error);
     process.exit(1);
   }
 }
@@ -236,6 +270,9 @@ async function startBot() {
     // Validate environment variables
     validateEnvironment();
 
+    // Initialize database schema before any other startup work
+    await economyService.initializeDatabase();
+
     // Set up the health check server
     const server = await setupHealthServer();
     CONFIG.setServer(server);
@@ -245,18 +282,18 @@ async function startBot() {
     while (retries > 0) {
       try {
         await client.login(process.env.DISCORD_TOKEN);
-        console.log('Logged in to Discord!');
+        logger.discord.connect('Logged in to Discord!');
         break;
       } catch (error) {
         retries--;
         if (retries === 0) throw error;
-        console.warn(`Login failed, retrying... (${retries} attempts remaining)`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        logger.warn(`Login failed, retrying... (${retries} attempts remaining)`);
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
-    console.log('Bot startup complete!');
+    logger.discord.ready('Bot startup complete!');
   } catch (error) {
-    console.error('Critical startup error:', error);
+    logger.discord.error('Critical startup error:', error);
     process.exit(1);
   }
 }

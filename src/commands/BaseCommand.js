@@ -3,19 +3,23 @@
  * @module commands/BaseCommand
  */
 
-const CONFIG = require('../config/config');
+import CONFIG from '../config/config.js';
 
 class BaseCommand {
-  constructor(client, {
-    name = null,
-    description = 'No description provided.',
-    category = 'Miscellaneous',
-    usage = 'No usage provided.',
-    enabled = true,
-    cooldown = CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
-    aliases = [],
-    permissions = []
-  }) {
+  constructor(
+    client,
+    {
+      name = null,
+      description = 'No description provided.',
+      category = 'Miscellaneous',
+      usage = 'No usage provided.',
+      enabled = true,
+      cooldown = CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
+      aliases = [],
+      permissions = [],
+      exclusiveSession = false,
+    }
+  ) {
     this.client = client;
     this.name = name;
     this.description = description;
@@ -25,11 +29,15 @@ class BaseCommand {
     this.cooldown = cooldown;
     this.aliases = aliases;
     this.permissions = permissions;
+    this.exclusiveSession = exclusiveSession;
   }
 
-  async execute(message, args) {
-    throw new Error(`${this.name} doesn't have an execute method!`);
+  /**
+   * @abstract
+   */
+  execute(_message, _args) {
+    throw new Error('Command not implemented');
   }
 }
 
-module.exports = BaseCommand; 
+export default BaseCommand;

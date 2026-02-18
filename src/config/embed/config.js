@@ -3,9 +3,9 @@
  * @module config/embed/config
  */
 
-const { Colors } = require('discord.js');
+import { Colors } from 'discord.js';
 
-module.exports = {
+export default {
   COLORS: {
     AI_LOADING: Colors.Blue,
     AI_RESPONSE: Colors.Green,
@@ -13,7 +13,7 @@ module.exports = {
     ERROR: Colors.Red,
     DEFAULT: Colors.Blurple,
     SUCCESS: Colors.Green,
-    ULTRA_GROWTH: Colors.Gold
+    ULTRA_GROWTH: Colors.Gold,
   },
   EMBED: {
     AI_TITLE: 'Zears AI H',
@@ -22,6 +22,6 @@ module.exports = {
     ERROR_AI: 'Ts is having no.',
     ERROR_IMAGE_PREFIX: 'Failed to generate image. Error: ',
     EMPTY_QUERY: 'What am i supposed to do nga?',
-    EMPTY_IMAGE_PROMPT: 'What do you want me to generate nga?'
-  }
-}; 
+    EMPTY_IMAGE_PROMPT: 'What do you want me to generate nga?',
+  },
+};
