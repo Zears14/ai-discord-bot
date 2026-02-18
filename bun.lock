@@ -6,6 +6,7 @@
       "name": "niggaz-ai-h",
       "dependencies": {
         "@google/genai": "^0.13.0",
+        "debug": "^4.4.3",
         "discord.js": "^14.25.1",
         "dotenv": "^16.4.5",
         "pg": "^8.16.3",
