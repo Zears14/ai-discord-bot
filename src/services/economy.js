@@ -825,9 +825,6 @@ async function healthCheck() {
   }
 }
 
-// Initialize database on startup
-initializeDatabase().catch((e) => logger.discord.dbError('Failed to initialize database', e));
-
 // Enhanced graceful shutdown handlers with single cleanup call
 const gracefulShutdown = (signal) => {
   logger.info(`Received ${signal}, starting graceful shutdown...`);

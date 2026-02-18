@@ -10,6 +10,7 @@ import { Client, GatewayIntentBits, ActivityType } from 'discord.js';
 import CONFIG from './config/config.js';
 import CommandHandler from './handlers/CommandHandler.js';
 import ItemHandler from './handlers/ItemHandler.js';
+import economyService from './services/economy.js';
 import inventoryService from './services/inventoryService.js';
 import logger from './services/loggerService.js';
 // Global error handler
@@ -268,6 +269,9 @@ async function startBot() {
   try {
     // Validate environment variables
     validateEnvironment();
+
+    // Initialize database schema before any other startup work
+    await economyService.initializeDatabase();
 
     // Set up the health check server
     const server = await setupHealthServer();
