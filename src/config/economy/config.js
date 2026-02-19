@@ -15,6 +15,15 @@ export default {
     GROW_INTERVAL: 12, // hours
     MIN_BALANCE: 0,
     RICH_THRESHOLD: 500,
+    LEVELING: {
+      STATE_KEY: 'levelData',
+      XP_COOLDOWN_KEY: 'levelXpCooldownUntil',
+      XP_COOLDOWN_SECONDS: 20,
+      XP_PER_COMMAND_MIN: 8,
+      XP_PER_COMMAND_MAX: 16,
+      BASE_XP_TO_LEVEL: 100,
+      XP_GROWTH_BPS: 11750, // 1.175x per level (basis points)
+    },
     GROW_SCALING: {
       BASE_MIN: 8,
       BASE_MAX: 30,

@@ -4,8 +4,16 @@ import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
 import historyService from '../services/historyService.js';
 import inventoryService from '../services/inventoryService.js';
+import levelService from '../services/levelService.js';
 import logger from '../services/loggerService.js';
 import { formatMoney } from '../utils/moneyUtils.js';
+
+function buildXpBar(currentXp, xpToNext, size = 12) {
+  if (xpToNext <= 0n) return '░'.repeat(size);
+  const filled = Number((currentXp * BigInt(size)) / xpToNext);
+  const clampedFilled = Math.max(0, Math.min(size, filled));
+  return `${'█'.repeat(clampedFilled)}${'░'.repeat(size - clampedFilled)}`;
+}
 
 class ProfileCommand extends BaseCommand {
   constructor(client) {
@@ -23,8 +31,13 @@ class ProfileCommand extends BaseCommand {
     const target = message.mentions.users.first() || message.author;
     const guildId = message.guild.id;
     try {
-      const userData = await economy.getUserData(target.id, guildId);
-      const inventory = await inventoryService.getInventory(target.id, guildId);
+      const [userData, inventory, stats, levelData, targetMember] = await Promise.all([
+        economy.getUserData(target.id, guildId),
+        inventoryService.getInventory(target.id, guildId),
+        historyService.getUserStats(target.id, guildId),
+        levelService.getLevelData(target.id, guildId),
+        message.guild.members.fetch(target.id).catch(() => null),
+      ]);
       const lastGrowTime = userData.lastGrow;
 
       // Calculate inventory worth
@@ -35,46 +48,54 @@ class ProfileCommand extends BaseCommand {
         }
       }
 
-      // Get activity stats from history
-      const stats = await historyService.getUserStats(target.id, guildId);
+      const xpBar = buildXpBar(levelData.currentXp, levelData.xpToNext);
+      const memberSince = targetMember?.joinedTimestamp
+        ? `<t:${Math.floor(targetMember.joinedTimestamp / 1000)}:R>`
+        : 'Unknown';
 
       const profileEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.DEFAULT)
         .setTitle(`${target.username}'s Profile`)
         .setThumbnail(target.displayAvatarURL({ dynamic: true }))
         .addFields(
-          { name: '💰 Balance', value: `${formatMoney(userData.balance)} cm`, inline: true },
-          { name: '🎒 Inventory Worth', value: `${formatMoney(inventoryWorth)} cm`, inline: true },
           {
-            name: '💎 Net Worth',
-            value: `${formatMoney(userData.balance + inventoryWorth)} cm`,
+            name: '🏅 Level',
+            value: [
+              `Level: **${levelData.level}**`,
+              `XP: ${formatMoney(levelData.currentXp)}/${formatMoney(levelData.xpToNext)}`,
+              `Progress: \`${xpBar}\``,
+            ].join('\n'),
+            inline: false,
+          },
+          {
+            name: '💰 Economy',
+            value: [
+              `Balance: ${formatMoney(userData.balance)} cm`,
+              `Inventory Worth: ${formatMoney(inventoryWorth)} cm`,
+              `Net Worth: ${formatMoney(userData.balance + inventoryWorth)} cm`,
+              `Inventory Items: ${inventory.length}`,
+            ].join('\n'),
             inline: true,
           },
           {
-            name: '🎰 Total Gambled',
-            value: `${formatMoney(stats.total_gambled ?? 0n)} cm`,
-            inline: true,
-          },
-          { name: '🎲 Games Played', value: `${stats.games_played ?? 0n}`, inline: true },
-          {
-            name: '📈 Gambling Stats',
-            value: `Won: ${formatMoney(stats.total_won ?? 0n)} cm\nLost: ${formatMoney(stats.total_lost ?? 0n)} cm`,
-            inline: true,
-          },
-          {
-            name: '🌟 Earnings',
-            value: `Claimed: ${formatMoney(stats.total_earned ?? 0n)} cm\nDaily: ${stats.daily_claims ?? 0n}\nGrow: ${stats.grow_claims ?? 0n}`,
+            name: '🎲 Gambling',
+            value: [
+              `Games Played: ${stats.games_played ?? 0n}`,
+              `Total Gambled: ${formatMoney(stats.total_gambled ?? 0n)} cm`,
+              `Won: ${formatMoney(stats.total_won ?? 0n)} cm`,
+              `Lost: ${formatMoney(stats.total_lost ?? 0n)} cm`,
+            ].join('\n'),
             inline: true,
           },
           {
-            name: '🌱 Last Grow',
-            value: lastGrowTime ? `<t:${Math.floor(lastGrowTime.getTime() / 1000)}:R>` : 'Never',
-            inline: true,
-          },
-          { name: '📦 Inventory Size', value: `${inventory.length} items`, inline: true },
-          {
-            name: '💫 Member Since',
-            value: `<t:${Math.floor(message.member.joinedTimestamp / 1000)}:R>`,
+            name: '📅 Activity',
+            value: [
+              `Earned (Daily/Grow): ${formatMoney(stats.total_earned ?? 0n)} cm`,
+              `Daily Claims: ${stats.daily_claims ?? 0n}`,
+              `Grow Claims: ${stats.grow_claims ?? 0n}`,
+              `Last Grow: ${lastGrowTime ? `<t:${Math.floor(lastGrowTime.getTime() / 1000)}:R>` : 'Never'}`,
+              `Member Since: ${memberSince}`,
+            ].join('\n'),
             inline: true,
           }
         )

@@ -10,6 +10,7 @@ import { Collection } from 'discord.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import CONFIG from '../config/config.js';
+import levelService from '../services/levelService.js';
 import logger from '../services/loggerService.js';
 import ErrorHandler from '../utils/errorHandler.js';
 
@@ -303,8 +304,21 @@ class CommandHandler {
       }
     }
 
-    if (!didThrow && !this.shouldSkipCooldown(executionResult)) {
-      this.setCooldown(message.author.id, command);
+    if (!didThrow) {
+      const shouldSkipCooldown = this.shouldSkipCooldown(executionResult);
+      if (!shouldSkipCooldown) {
+        this.setCooldown(message.author.id, command);
+        await levelService
+          .awardCommandXp(message.author.id, message.guild.id, command.name)
+          .catch((error) => {
+            logger.discord.cmdError('Failed to award command XP:', {
+              userId: message.author.id,
+              guildId: message.guild.id,
+              command: command.name,
+              error,
+            });
+          });
+      }
     }
   }
 }
