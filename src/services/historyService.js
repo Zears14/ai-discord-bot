@@ -71,8 +71,8 @@ async function getUserActivity(userid, guildid, limit = 10) {
 async function getUserStats(userid, guildid) {
   const query = `
         SELECT 
-            COUNT(*) FILTER (WHERE type IN ('slots', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'roulette')) as games_played,
-            COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN ('slots', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'roulette')), 0) as total_gambled,
+            COUNT(*) FILTER (WHERE type IN ('slots', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'blackjack-surrender', 'roulette')) as games_played,
+            COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN ('slots', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'blackjack-surrender', 'roulette')), 0) as total_gambled,
             COALESCE(SUM(amount) FILTER (WHERE type IN ('grow', 'daily')), 0) as total_earned,
             COALESCE(SUM(amount) FILTER (WHERE amount > 0 AND type NOT IN ('grow', 'daily')), 0) as total_won,
             COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0) as total_lost,
@@ -102,8 +102,8 @@ async function getGuildStats(guildid) {
   const query = `
         SELECT 
             COUNT(DISTINCT userid) as active_users,
-            COUNT(*) FILTER (WHERE type IN ('slots', 'blackjack', 'blackjack-loss', 'blackjack-push', 'roulette')) as total_games,
-            COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN ('slots', 'blackjack', 'blackjack-loss', 'blackjack-push', 'roulette')), 0) as total_gambled,
+            COUNT(*) FILTER (WHERE type IN ('slots', 'blackjack', 'blackjack-loss', 'blackjack-push', 'blackjack-surrender', 'roulette')) as total_games,
+            COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN ('slots', 'blackjack', 'blackjack-loss', 'blackjack-push', 'blackjack-surrender', 'roulette')), 0) as total_gambled,
             COUNT(DISTINCT type) as unique_activities,
             COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) as total_gained,
             COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0) as total_lost,

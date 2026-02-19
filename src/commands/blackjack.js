@@ -28,8 +28,8 @@ function formatCard(cardObj) {
   return `${cardObj.card}${cardObj.suit}`;
 }
 
-// Function to calculate hand value
-function calculateHandValue(hand) {
+// Function to calculate hand value and softness
+function calculateHandDetails(hand) {
   let value = 0;
   let aces = 0;
 
@@ -48,7 +48,15 @@ function calculateHandValue(hand) {
     aces--;
   }
 
-  return value;
+  return {
+    value,
+    isSoft: aces > 0,
+  };
+}
+
+// Function to calculate hand value
+function calculateHandValue(hand) {
+  return calculateHandDetails(hand).value;
 }
 
 class BlackjackCommand extends BaseCommand {
@@ -87,6 +95,10 @@ class BlackjackCommand extends BaseCommand {
       return message.reply(`You don't have enough Dih! Your balance: ${formatMoney(balance)} cm`);
     }
 
+    const highTableMinBet = CONFIG.COMMANDS.BLACKJACK.GAME.HIGH_TABLE_MIN_BET;
+    const isHighTable = bet >= highTableMinBet;
+    const canSurrender = bet < highTableMinBet;
+
     // Deduct bet up front to prevent timeout/selection exploit
     await economy.updateBalance(userId, guildId, -bet, 'blackjack-bet');
 
@@ -94,12 +106,26 @@ class BlackjackCommand extends BaseCommand {
     const playerHand = [drawCard(), drawCard()];
     const dealerHand = [drawCard(), drawCard()];
     const playerValue = calculateHandValue(playerHand);
+    const tableNotice = isHighTable
+      ? `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIGH_TABLE} This is now a High Table. Dealer hits on soft 17.`
+      : `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} Surrender is available before your first action for a 50% refund.`;
+    const footerText = canSurrender
+      ? `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit, Stand, or Surrender`
+      : `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit or Stand`;
 
     // Create initial game embed
     const gameEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.IN_PROGRESS)
-      .setTitle(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack`)
-      .setDescription(`${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm`)
+      .setColor(
+        isHighTable
+          ? CONFIG.COMMANDS.BLACKJACK.COLORS.HIGH_TABLE_IN_PROGRESS
+          : CONFIG.COMMANDS.BLACKJACK.COLORS.IN_PROGRESS
+      )
+      .setTitle(
+        `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${isHighTable ? ' • High Table' : ''}`
+      )
+      .setDescription(
+        `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${tableNotice}`
+      )
       .addFields(
         {
           name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
@@ -113,7 +139,7 @@ class BlackjackCommand extends BaseCommand {
         }
       )
       .setFooter({
-        text: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit or Stand`,
+        text: footerText,
       });
 
     // Check for blackjack
@@ -164,28 +190,38 @@ class BlackjackCommand extends BaseCommand {
       }
     }
 
-    // Create buttons for hit/stand
-    const row = {
-      type: 1,
-      components: [
-        {
-          type: 2,
-          style: 1,
-          label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} Hit`,
-          custom_id: 'hit',
-        },
-        {
-          type: 2,
-          style: 4,
-          label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.STAND} Stand`,
-          custom_id: 'stand',
-        },
-      ],
+    const hitButton = {
+      type: 2,
+      style: isHighTable ? 4 : 1,
+      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} Hit`,
+      custom_id: 'hit',
     };
+    const standButton = {
+      type: 2,
+      style: isHighTable ? 1 : 4,
+      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.STAND} Stand`,
+      custom_id: 'stand',
+    };
+    const surrenderButton = {
+      type: 2,
+      style: 2,
+      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} Surrender`,
+      custom_id: 'surrender',
+    };
+
+    const rowWithoutSurrender = {
+      type: 1,
+      components: [hitButton, standButton],
+    };
+    const rowWithSurrender = {
+      type: 1,
+      components: [hitButton, standButton, surrenderButton],
+    };
+    const initialRow = canSurrender ? rowWithSurrender : rowWithoutSurrender;
 
     const gameReply = await message.reply({
       embeds: [gameEmbed],
-      components: [row],
+      components: [initialRow],
     });
 
     // Create collector for button interactions
@@ -194,9 +230,46 @@ class BlackjackCommand extends BaseCommand {
       filter,
       time: CONFIG.COMMANDS.BLACKJACK.GAME.TIMEOUT,
     });
+    let hasTakenAction = false;
 
     collector.on('collect', async (i) => {
-      if (i.customId === 'hit') {
+      if (i.customId === 'surrender') {
+        if (!canSurrender || hasTakenAction) {
+          await i.reply({
+            content:
+              'Surrender is only available before your first action on tables below 10,000 cm.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const refund = bet / 2n;
+        await economy.updateBalance(userId, guildId, refund, 'blackjack-surrender');
+        gameEmbed
+          .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH)
+          .setDescription(
+            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} You surrendered and got back ${formatMoney(refund)} cm Dih.`
+          )
+          .setFields(
+            {
+              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+              value: `${playerHand.map(formatCard).join(' ')} (${calculateHandValue(playerHand)})`,
+              inline: true,
+            },
+            {
+              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+              value: `${dealerHand.map(formatCard).join(' ')} (${calculateHandValue(dealerHand)})`,
+              inline: true,
+            }
+          );
+
+        await i.update({
+          embeds: [gameEmbed],
+          components: [],
+        });
+        collector.stop('surrender');
+      } else if (i.customId === 'hit') {
+        hasTakenAction = true;
         playerHand.push(drawCard());
         const playerValue = calculateHandValue(playerHand);
 
@@ -239,16 +312,23 @@ class BlackjackCommand extends BaseCommand {
           );
           await i.update({
             embeds: [gameEmbed],
-            components: [row],
+            components: [rowWithoutSurrender],
           });
         }
       } else if (i.customId === 'stand') {
+        hasTakenAction = true;
         // Dealer's turn
-        let dealerValue = calculateHandValue(dealerHand);
-        while (dealerValue < CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE) {
+        let dealerDetails = calculateHandDetails(dealerHand);
+        while (
+          dealerDetails.value < CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE ||
+          (isHighTable &&
+            dealerDetails.value === CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE &&
+            dealerDetails.isSoft)
+        ) {
           dealerHand.push(drawCard());
-          dealerValue = calculateHandValue(dealerHand);
+          dealerDetails = calculateHandDetails(dealerHand);
         }
+        const dealerValue = dealerDetails.value;
 
         const playerValue = calculateHandValue(playerHand);
         let result;
