@@ -7,6 +7,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import logger from '../services/loggerService.js';
 import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
 
 // Roulette wheel configuration
@@ -62,85 +63,107 @@ class RouletteCommand extends BaseCommand {
       );
     }
 
-    // Create initial spinning animation embed with loading bar
-    const spinEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Roulette Wheel')
-      .setDescription('```\n[=         ] Spinning...\n```')
-      .setTimestamp();
+    let betDeducted = false;
+    let settled = false;
 
-    const spinMsg = await message.reply({ embeds: [spinEmbed] });
+    try {
+      // Deduct the bet up front to avoid mid-command interruption exploits.
+      await economy.updateBalance(userId, guildId, -amount, 'roulette-bet');
+      betDeducted = true;
 
-    // Determine result early but don't show it
-    const winningNumber = ROULETTE_NUMBERS[Math.floor(Math.random() * ROULETTE_NUMBERS.length)];
-    const winningColor = RED_NUMBERS.includes(winningNumber)
-      ? 'red'
-      : BLACK_NUMBERS.includes(winningNumber)
-        ? 'black'
-        : 'green';
+      // Create initial spinning animation embed with loading bar
+      const spinEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Roulette Wheel')
+        .setDescription('```\n[=         ] Spinning...\n```')
+        .setTimestamp();
 
-    // Wait for "spin" with just two message updates
-    await new Promise((resolve) => setTimeout(resolve, 700));
+      const spinMsg = await message.reply({ embeds: [spinEmbed] });
 
-    // Update with progress
-    const midEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Roulette Wheel')
-      .setDescription('```\n[=====     ] Still spinning...\n```')
-      .setTimestamp();
-    await spinMsg.edit({ embeds: [midEmbed] });
+      // Determine result early but don't show it
+      const winningNumber = ROULETTE_NUMBERS[Math.floor(Math.random() * ROULETTE_NUMBERS.length)];
+      const winningColor = RED_NUMBERS.includes(winningNumber)
+        ? 'red'
+        : BLACK_NUMBERS.includes(winningNumber)
+          ? 'black'
+          : 'green';
 
-    await new Promise((resolve) => setTimeout(resolve, 700));
+      // Wait for "spin" with just two message updates
+      await new Promise((resolve) => setTimeout(resolve, 700));
 
-    // Show final spin with click effect
-    const finalSpinEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Roulette Wheel')
-      .setDescription('```\n[=========] *Click*\n```')
-      .setTimestamp();
-    await spinMsg.edit({ embeds: [finalSpinEmbed] });
+      // Update with progress
+      const midEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Roulette Wheel')
+        .setDescription('```\n[=====     ] Still spinning...\n```')
+        .setTimestamp();
+      await spinMsg.edit({ embeds: [midEmbed] });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 700));
 
-    let winnings = -amount;
-    let resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You lost ${formatMoney(amount)} cm Dih.`;
+      // Show final spin with click effect
+      const finalSpinEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Roulette Wheel')
+        .setDescription('```\n[=========] *Click*\n```')
+        .setTimestamp();
+      await spinMsg.edit({ embeds: [finalSpinEmbed] });
 
-    // Check for win
-    if (betType === winningColor) {
-      winnings = amount; // 2x payout
-      resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You won ${formatMoney(winnings)} cm Dih!`;
-    } else if (betType === 'even' && winningNumber % 2 === 0 && winningNumber !== 0) {
-      winnings = amount; // 2x payout
-      resultMessage = `The ball landed on **${winningNumber}**. It's an even number! You won ${formatMoney(winnings)} cm Dih!`;
-    } else if (betType === 'odd' && winningNumber % 2 !== 0) {
-      winnings = amount; // 2x payout
-      resultMessage = `The ball landed on **${winningNumber}**. It's an odd number! You won ${formatMoney(winnings)} cm Dih!`;
-    } else if (parseInt(betType) === winningNumber) {
-      winnings = amount * 35n; // 36x payout
-      resultMessage = `The ball landed on **${winningNumber}**. You hit the number! You won ${formatMoney(winnings)} cm Dih!`;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      let payout = 0n;
+      let resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You lost ${formatMoney(amount)} cm Dih.`;
+
+      // Check for win
+      if (betType === winningColor) {
+        payout = amount * 2n;
+        resultMessage = `The ball landed on **${winningNumber} (${winningColor.toUpperCase()})**. You won ${formatMoney(amount)} cm Dih!`;
+      } else if (betType === 'even' && winningNumber % 2 === 0 && winningNumber !== 0) {
+        payout = amount * 2n;
+        resultMessage = `The ball landed on **${winningNumber}**. It's an even number! You won ${formatMoney(amount)} cm Dih!`;
+      } else if (betType === 'odd' && winningNumber % 2 !== 0) {
+        payout = amount * 2n;
+        resultMessage = `The ball landed on **${winningNumber}**. It's an odd number! You won ${formatMoney(amount)} cm Dih!`;
+      } else if (parseInt(betType) === winningNumber) {
+        payout = amount * 36n;
+        resultMessage = `The ball landed on **${winningNumber}**. You hit the number! You won ${formatMoney(amount * 35n)} cm Dih!`;
+      }
+
+      if (payout > 0n) {
+        await economy.updateBalance(userId, guildId, payout, 'roulette-win');
+      } else {
+        await economy.updateBalance(userId, guildId, 0n, 'roulette-loss');
+      }
+      settled = true;
+      const newBalance = await economy.getBalance(userId, guildId);
+
+      // Create embed
+      const embed = new EmbedBuilder()
+        .setColor(payout > 0n ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
+        .setTitle('Roulette')
+        .setDescription(resultMessage)
+        .addFields(
+          {
+            name: 'Your Bet',
+            value: `${betType.toUpperCase()} - ${formatMoney(amount)} cm`,
+            inline: true,
+          },
+          { name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true }
+        )
+        .setTimestamp();
+
+      // Edit the spinning message with the final result
+      return spinMsg.edit({ embeds: [embed] });
+    } catch (error) {
+      if (betDeducted && !settled) {
+        await economy
+          .updateBalance(userId, guildId, amount, 'roulette-refund')
+          .catch((refundError) => {
+            logger.discord.dbError('Failed to refund interrupted roulette bet:', refundError);
+          });
+      }
+      throw error;
     }
-
-    // Update balance
-    await economy.updateBalance(userId, guildId, winnings, 'roulette');
-    const newBalance = balance + winnings;
-
-    // Create embed
-    const embed = new EmbedBuilder()
-      .setColor(winnings > 0n ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
-      .setTitle('Roulette')
-      .setDescription(resultMessage)
-      .addFields(
-        {
-          name: 'Your Bet',
-          value: `${betType.toUpperCase()} - ${formatMoney(amount)} cm`,
-          inline: true,
-        },
-        { name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true }
-      )
-      .setTimestamp();
-
-    // Edit the spinning message with the final result
-    return spinMsg.edit({ embeds: [embed] });
   }
 }
 
