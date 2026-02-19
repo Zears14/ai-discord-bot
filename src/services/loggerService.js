@@ -12,9 +12,30 @@ const level = isDevelopment ? 'debug' : 'info';
 
 const bigintJsonReplacer = (_key, value) => (typeof value === 'bigint' ? value.toString() : value);
 
+function serializeError(error) {
+  if (!(error instanceof Error)) return error;
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    ...(error.code ? { code: error.code } : {}),
+  };
+}
+
+function normalizeMeta(meta) {
+  if (meta instanceof Error) {
+    return { error: serializeError(meta) };
+  }
+  return meta && typeof meta === 'object' ? meta : {};
+}
+
 function serializeMetaValue(value) {
   if (typeof value === 'bigint') {
     return value.toString();
+  }
+
+  if (value instanceof Error) {
+    return JSON.stringify(serializeError(value), bigintJsonReplacer);
   }
 
   if (typeof value === 'object' && value !== null) {
@@ -158,25 +179,25 @@ const logger = winston.createLogger({
 // Add convenience methods for Discord bot modules
 logger.discord = {
   // Bot lifecycle events
-  ready: (msg, meta = {}) => logger.info(msg, { ...meta, module: 'discord' }),
-  connect: (msg, meta = {}) => logger.info(msg, { ...meta, module: 'discord' }),
-  disconnect: (msg, meta = {}) => logger.warn(msg, { ...meta, module: 'discord' }),
-  error: (msg, meta = {}) => logger.error(msg, { ...meta, module: 'discord' }),
+  ready: (msg, meta = {}) => logger.info(msg, { ...normalizeMeta(meta), module: 'discord' }),
+  connect: (msg, meta = {}) => logger.info(msg, { ...normalizeMeta(meta), module: 'discord' }),
+  disconnect: (msg, meta = {}) => logger.warn(msg, { ...normalizeMeta(meta), module: 'discord' }),
+  error: (msg, meta = {}) => logger.error(msg, { ...normalizeMeta(meta), module: 'discord' }),
 
   // Command handling
-  command: (msg, meta = {}) => logger.info(msg, { ...meta, module: 'commands' }),
-  cmdError: (msg, meta = {}) => logger.error(msg, { ...meta, module: 'commands' }),
+  command: (msg, meta = {}) => logger.info(msg, { ...normalizeMeta(meta), module: 'commands' }),
+  cmdError: (msg, meta = {}) => logger.error(msg, { ...normalizeMeta(meta), module: 'commands' }),
 
   // Event handling
-  event: (msg, meta = {}) => logger.debug(msg, { ...meta, module: 'events' }),
+  event: (msg, meta = {}) => logger.debug(msg, { ...normalizeMeta(meta), module: 'events' }),
 
   // Database operations
-  db: (msg, meta = {}) => logger.info(msg, { ...meta, module: 'database' }),
-  dbError: (msg, meta = {}) => logger.error(msg, { ...meta, module: 'database' }),
+  db: (msg, meta = {}) => logger.info(msg, { ...normalizeMeta(meta), module: 'database' }),
+  dbError: (msg, meta = {}) => logger.error(msg, { ...normalizeMeta(meta), module: 'database' }),
 
   // API calls
-  api: (msg, meta = {}) => logger.debug(msg, { ...meta, module: 'api' }),
-  apiError: (msg, meta = {}) => logger.error(msg, { ...meta, module: 'api' }),
+  api: (msg, meta = {}) => logger.debug(msg, { ...normalizeMeta(meta), module: 'api' }),
+  apiError: (msg, meta = {}) => logger.error(msg, { ...normalizeMeta(meta), module: 'api' }),
 };
 
 // Bot startup log
