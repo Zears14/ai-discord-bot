@@ -134,27 +134,101 @@ class CommandHandler {
   }
 
   /**
-   * Checks if a user is on cooldown for a command
+   * Gets remaining cooldown for a command/user in seconds
    * @param {string} userId - User ID
    * @param {Object} command - Command object
    * @returns {number} Remaining cooldown time in seconds
    */
-  checkCooldown(userId, command) {
+  getCooldownRemaining(userId, command) {
     const now = Date.now();
-    const cooldownAmount = (command.cooldown || CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
-
-    // Use Map's get-or-set pattern for better performance
-    const timestamps =
-      this.cooldowns.get(command.name) ||
-      this.cooldowns.set(command.name, new Collection()).get(command.name);
+    const timestamps = this.cooldowns.get(command.name);
+    if (!timestamps) return 0;
 
     const expirationTime = timestamps.get(userId);
     if (expirationTime && now < expirationTime) {
       return (expirationTime - now) / 1000;
     }
 
-    timestamps.set(userId, now + cooldownAmount);
     return 0;
+  }
+
+  /**
+   * Sets cooldown expiration for a command/user
+   * @param {string} userId - User ID
+   * @param {Object} command - Command object
+   */
+  setCooldown(userId, command) {
+    const now = Date.now();
+    const cooldownAmount = (command.cooldown ?? CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
+    if (cooldownAmount <= 0) return;
+    const timestamps =
+      this.cooldowns.get(command.name) ||
+      this.cooldowns.set(command.name, new Collection()).get(command.name);
+    timestamps.set(userId, now + cooldownAmount);
+  }
+
+  /**
+   * Determine whether cooldown should be skipped due to input/usage errors.
+   * Commands can also explicitly return `{ skipCooldown: true }`.
+   * @param {any} executionResult
+   * @returns {boolean}
+   */
+  shouldSkipCooldown(executionResult) {
+    if (executionResult && typeof executionResult === 'object' && executionResult.skipCooldown) {
+      return true;
+    }
+
+    if (!executionResult || typeof executionResult !== 'object') {
+      return false;
+    }
+
+    const content =
+      typeof executionResult.content === 'string' ? executionResult.content.toLowerCase() : '';
+    if (this.isLikelyInputErrorText(content)) {
+      return true;
+    }
+
+    if (Array.isArray(executionResult.embeds)) {
+      for (const embed of executionResult.embeds) {
+        const title = (embed?.title || embed?.data?.title || '').toLowerCase();
+        const description = (embed?.description || embed?.data?.description || '').toLowerCase();
+        if (
+          this.isLikelyInputErrorText(title) ||
+          this.isLikelyInputErrorText(description) ||
+          title.includes('invalid')
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Heuristic matcher for user input/usage validation responses.
+   * @param {string} text
+   * @returns {boolean}
+   */
+  isLikelyInputErrorText(text) {
+    if (!text) return false;
+
+    const patterns = [
+      /usage:\s*`?/i,
+      /\binvalid\b/i,
+      /please (provide|mention|specify|ask)\b/i,
+      /\bmust (be|have)\b/i,
+      /\bat least\b/i,
+      /\bat most\b/i,
+      /\bnot found\b/i,
+      /\byou cannot\b/i,
+      /\byou can't\b/i,
+      /\bdon't have enough\b/i,
+      /\bdo not have enough\b/i,
+      /\byou need at least\b/i,
+    ];
+
+    return patterns.some((pattern) => pattern.test(text));
   }
 
   /**
@@ -203,7 +277,7 @@ class CommandHandler {
     }
 
     // Check cooldown
-    const cooldownTime = this.checkCooldown(message.author.id, command);
+    const cooldownTime = this.getCooldownRemaining(message.author.id, command);
     if (cooldownTime > 0) {
       return message.reply(
         `Please wait ${cooldownTime.toFixed(1)} more second(s) before using the \`${command.name}\` command.`
@@ -211,19 +285,26 @@ class CommandHandler {
     }
 
     const hasExclusiveSession = Boolean(command.exclusiveSession);
+    let executionResult;
+    let didThrow = false;
 
     try {
       if (hasExclusiveSession) {
         this.activeUserCommands.set(message.author.id, command.name);
       }
-      await command.execute(message, args);
+      executionResult = await command.execute(message, args);
     } catch (error) {
+      didThrow = true;
       await ErrorHandler.handle(error, message, command);
     } finally {
       // Only clear if this command still owns the active session
       if (hasExclusiveSession && this.activeUserCommands.get(message.author.id) === command.name) {
         this.activeUserCommands.delete(message.author.id);
       }
+    }
+
+    if (!didThrow && !this.shouldSkipCooldown(executionResult)) {
+      this.setCooldown(message.author.id, command);
     }
   }
 }

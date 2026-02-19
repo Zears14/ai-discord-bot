@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import logger from '../services/loggerService.js';
 import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
 
 class SlotsCommand extends BaseCommand {
@@ -32,86 +33,102 @@ class SlotsCommand extends BaseCommand {
       return message.reply('You do not have enough Dih to place that bet.');
     }
 
-    const reels = ['🍒', '🍊', '🍋', '🍇', '🍉', '🍓', '⭐', '💎'];
-    const reel1 = reels[Math.floor(Math.random() * reels.length)];
-    const reel2 = reels[Math.floor(Math.random() * reels.length)];
-    const reel3 = reels[Math.floor(Math.random() * reels.length)];
+    let betDeducted = false;
+    let settled = false;
 
-    // Create initial embed with empty slots
-    const initialEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Slot Machine 🎰')
-      .setDescription('```\n[ ❓ | ❓ | ❓ ]\n```')
-      .setTimestamp();
+    try {
+      // Deduct the bet up front to avoid mid-command interruption exploits.
+      await economy.updateBalance(userId, guildId, -bet, 'slots-bet');
+      betDeducted = true;
 
-    const msg = await message.reply({ embeds: [initialEmbed] });
+      const reels = ['🍒', '🍊', '🍋', '🍇', '🍉', '🍓', '⭐', '💎'];
+      const reel1 = reels[Math.floor(Math.random() * reels.length)];
+      const reel2 = reels[Math.floor(Math.random() * reels.length)];
+      const reel3 = reels[Math.floor(Math.random() * reels.length)];
 
-    // First reel animation
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    const firstReelEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Slot Machine 🎰')
-      .setDescription(`\`\`\`\n[ ${reel1} | ❓ | ❓ ]\n\`\`\``)
-      .setTimestamp();
-    await msg.edit({ embeds: [firstReelEmbed] });
+      // Create initial embed with empty slots
+      const initialEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Slot Machine 🎰')
+        .setDescription('```\n[ ❓ | ❓ | ❓ ]\n```')
+        .setTimestamp();
 
-    // Second reel animation
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    const secondReelEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Slot Machine 🎰')
-      .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ❓ ]\n\`\`\``)
-      .setTimestamp();
-    await msg.edit({ embeds: [secondReelEmbed] });
+      const msg = await message.reply({ embeds: [initialEmbed] });
 
-    // Third reel animation with suspense pause
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const thirdReelEmbed = new EmbedBuilder()
-      .setColor(CONFIG.COLORS.DEFAULT)
-      .setTitle('🎰 Slot Machine 🎰')
-      .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
-      .setTimestamp();
-    await msg.edit({ embeds: [thirdReelEmbed] });
+      // First reel animation
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const firstReelEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Slot Machine 🎰')
+        .setDescription(`\`\`\`\n[ ${reel1} | ❓ | ❓ ]\n\`\`\``)
+        .setTimestamp();
+      await msg.edit({ embeds: [firstReelEmbed] });
 
-    // Calculate winnings
-    let winnings = 0n;
-    let resultMessage = `You lost ${formatMoney(bet)} cm Dih.`;
+      // Second reel animation
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const secondReelEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Slot Machine 🎰')
+        .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ❓ ]\n\`\`\``)
+        .setTimestamp();
+      await msg.edit({ embeds: [secondReelEmbed] });
 
-    if (reel1 === reel2 && reel2 === reel3) {
-      if (reel1 === '💎') {
-        winnings = bet * 5n;
-      } else if (reel1 === '⭐') {
-        winnings = bet * 3n;
-      } else {
-        winnings = bet * 2n;
+      // Third reel animation with suspense pause
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const thirdReelEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('🎰 Slot Machine 🎰')
+        .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
+        .setTimestamp();
+      await msg.edit({ embeds: [thirdReelEmbed] });
+
+      // Calculate total payout (stake included).
+      let payout = 0n;
+      let resultMessage = `You lost ${formatMoney(bet)} cm Dih.`;
+
+      if (reel1 === reel2 && reel2 === reel3) {
+        if (reel1 === '💎') {
+          payout = bet * 5n;
+        } else if (reel1 === '⭐') {
+          payout = bet * 3n;
+        } else {
+          payout = bet * 2n;
+        }
+      } else if (reel1 === reel2 || reel2 === reel3 || reel1 === reel3) {
+        payout = (bet * 3n) / 2n;
       }
-    } else if (reel1 === reel2 || reel2 === reel3 || reel1 === reel3) {
-      winnings = (bet * 3n) / 2n;
+
+      if (payout > 0n) {
+        await economy.updateBalance(userId, guildId, payout, 'slots-win');
+        resultMessage = `You won ${formatMoney(payout)} cm Dih!`;
+      } else {
+        await economy.updateBalance(userId, guildId, 0n, 'slots-loss');
+      }
+      settled = true;
+      const newBalance = await economy.getBalance(userId, guildId);
+
+      // Brief pause before showing result
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const finalEmbed = new EmbedBuilder()
+        .setColor(payout > 0n ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
+        .setTitle('🎰 Slot Machine 🎰')
+        .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
+        .addFields(
+          { name: 'Result', value: resultMessage, inline: true },
+          { name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true }
+        )
+        .setTimestamp();
+
+      await msg.edit({ embeds: [finalEmbed] });
+    } catch (error) {
+      if (betDeducted && !settled) {
+        await economy.updateBalance(userId, guildId, bet, 'slots-refund').catch((refundError) => {
+          logger.discord.dbError('Failed to refund interrupted slots bet:', refundError);
+        });
+      }
+      throw error;
     }
-
-    const balanceDelta = winnings - bet;
-
-    await economy.updateBalance(userId, guildId, balanceDelta, 'slots');
-    const newBalance = await economy.getBalance(userId, guildId);
-
-    if (winnings > 0n) {
-      resultMessage = `You won ${formatMoney(winnings)} cm Dih!`;
-    }
-
-    // Brief pause before showing result
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const finalEmbed = new EmbedBuilder()
-      .setColor(winnings > 0n ? CONFIG.COLORS.SUCCESS : CONFIG.COLORS.ERROR)
-      .setTitle('🎰 Slot Machine 🎰')
-      .setDescription(`\`\`\`\n[ ${reel1} | ${reel2} | ${reel3} ]\n\`\`\``)
-      .addFields(
-        { name: 'Result', value: resultMessage, inline: true },
-        { name: 'New Balance', value: `${formatMoney(newBalance)} cm`, inline: true }
-      )
-      .setTimestamp();
-
-    await msg.edit({ embeds: [finalEmbed] });
   }
 }
 
