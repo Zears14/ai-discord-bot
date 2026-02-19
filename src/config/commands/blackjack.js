@@ -34,11 +34,13 @@ export default {
     DEALER_STAND_VALUE: 17,
     BLACKJACK_PAYOUT: 1.5,
     TIMEOUT: 30000,
+    HIGH_TABLE_MIN_BET: 10000n,
   },
 
   // Embed colors
   COLORS: {
     IN_PROGRESS: Colors.Blue,
+    HIGH_TABLE_IN_PROGRESS: Colors.Orange,
     WIN: Colors.Green,
     LOSE: Colors.Red,
     PUSH: Colors.Yellow,
@@ -54,10 +56,12 @@ export default {
     INSTRUCTIONS: '🎮',
     HIT: '🎯',
     STAND: '✋',
+    SURRENDER: '🏳️',
     WIN: '🎉',
     LOSE: '💔',
     PUSH: '⚖️',
     BUST: '💥',
+    HIGH_TABLE: '🔥',
     TIMEOUT: '⏰',
   },
 };
