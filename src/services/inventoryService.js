@@ -1,9 +1,10 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
 const { Pool } = pg;
-import { createPoolConfig } from './dbConfig.js';
+import { createPoolConfig, isTransientDatabaseError } from './dbConfig.js';
 import historyService from './historyService.js';
 import itemsService from './itemsService.js';
+import logger from './loggerService.js';
 import { parsePositiveAmount, toBigInt } from '../utils/moneyUtils.js';
 
 let itemHandler;
@@ -13,6 +14,18 @@ function init(handler) {
 }
 
 const pool = new Pool(createPoolConfig());
+
+pool.on('error', (error) => {
+  if (isTransientDatabaseError(error)) {
+    logger.warn('Inventory service pool connection dropped; reconnecting on demand.', {
+      module: 'database',
+      error,
+    });
+    return;
+  }
+
+  logger.discord.dbError('Inventory service pool error:', error);
+});
 
 async function getInventory(userId, guildId) {
   const query = `

@@ -22,9 +22,43 @@ function serializeError(error) {
   };
 }
 
+function isErrorLike(value) {
+  return (
+    value &&
+    typeof value === 'object' &&
+    typeof value.message === 'string' &&
+    (typeof value.code === 'string' || typeof value.name === 'string')
+  );
+}
+
+function serializeErrorLike(errorLike) {
+  if (!errorLike || typeof errorLike !== 'object') return errorLike;
+
+  return {
+    name: typeof errorLike.name === 'string' ? errorLike.name : 'Error',
+    message: errorLike.message,
+    ...(typeof errorLike.code === 'string' ? { code: errorLike.code } : {}),
+    ...(typeof errorLike.severity === 'string' ? { severity: errorLike.severity } : {}),
+    ...(typeof errorLike.detail === 'string' ? { detail: errorLike.detail } : {}),
+    ...(typeof errorLike.hint === 'string' ? { hint: errorLike.hint } : {}),
+    ...(typeof errorLike.routine === 'string' ? { routine: errorLike.routine } : {}),
+    ...(typeof errorLike.stack === 'string' ? { stack: errorLike.stack } : {}),
+  };
+}
+
 function normalizeMeta(meta) {
   if (meta instanceof Error) {
     return { error: serializeError(meta) };
+  }
+  if (isErrorLike(meta)) {
+    return { error: serializeErrorLike(meta) };
+  }
+  if (meta && typeof meta === 'object') {
+    const sanitized = {};
+    for (const [key, value] of Object.entries(meta)) {
+      sanitized[key] = value instanceof Error ? serializeError(value) : value;
+    }
+    return sanitized;
   }
   return meta && typeof meta === 'object' ? meta : {};
 }
@@ -36,6 +70,9 @@ function serializeMetaValue(value) {
 
   if (value instanceof Error) {
     return JSON.stringify(serializeError(value), bigintJsonReplacer);
+  }
+  if (isErrorLike(value)) {
+    return JSON.stringify(serializeErrorLike(value), bigintJsonReplacer);
   }
 
   if (typeof value === 'object' && value !== null) {

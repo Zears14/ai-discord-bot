@@ -1,10 +1,22 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
-import { createPoolConfig } from './dbConfig.js';
+import { createPoolConfig, isTransientDatabaseError } from './dbConfig.js';
 import logger from './loggerService.js';
 const { Pool } = pg;
 
 const pool = new Pool(createPoolConfig());
+
+pool.on('error', (error) => {
+  if (isTransientDatabaseError(error)) {
+    logger.warn('History service pool connection dropped; reconnecting on demand.', {
+      module: 'database',
+      error,
+    });
+    return;
+  }
+
+  logger.discord.dbError('History service pool error:', error);
+});
 
 /**
  * Adds a new entry to the history table.

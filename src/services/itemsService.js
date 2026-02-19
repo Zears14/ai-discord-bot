@@ -1,10 +1,23 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
 const { Pool } = pg;
-import { createPoolConfig } from './dbConfig.js';
+import { createPoolConfig, isTransientDatabaseError } from './dbConfig.js';
+import logger from './loggerService.js';
 import { toBigInt } from '../utils/moneyUtils.js';
 
 const pool = new Pool(createPoolConfig());
+
+pool.on('error', (error) => {
+  if (isTransientDatabaseError(error)) {
+    logger.warn('Items service pool connection dropped; reconnecting on demand.', {
+      module: 'database',
+      error,
+    });
+    return;
+  }
+
+  logger.discord.dbError('Items service pool error:', error);
+});
 
 function normalizePrice(price) {
   if (price === undefined || price === null) {

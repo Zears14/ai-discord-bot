@@ -6,7 +6,7 @@
 import pg from 'pg';
 import './pgTypeParsers.js';
 const { Pool } = pg;
-import { createPoolConfig } from './dbConfig.js';
+import { createPoolConfig, isTransientDatabaseError } from './dbConfig.js';
 import historyService from './historyService.js';
 import jsonbService from './jsonbService.js';
 import logger from './loggerService.js';
@@ -34,6 +34,14 @@ pool.on('connect', () => {
 });
 
 pool.on('error', (err) => {
+  if (isTransientDatabaseError(err)) {
+    logger.warn('Postgres connection dropped; pool will reconnect automatically.', {
+      module: 'database',
+      error: err,
+    });
+    return;
+  }
+
   logger.discord.dbError('Postgres pool error:', err);
 });
 
@@ -110,7 +118,23 @@ async function safeQuery(query, params = [], retries = 3) {
         client.release();
       }
     } catch (error) {
-      logger.discord.dbError(`Query attempt ${attempt} failed:`, { error: error.message });
+      const transient = isTransientDatabaseError(error);
+      const logMeta = {
+        attempt,
+        retries,
+        transient,
+        code: error?.code,
+        message: error?.message,
+      };
+
+      if (transient) {
+        logger.warn(`Transient query attempt ${attempt} failed`, {
+          module: 'database',
+          ...logMeta,
+        });
+      } else {
+        logger.discord.dbError(`Query attempt ${attempt} failed`, logMeta);
+      }
 
       if (attempt === retries) throw error;
 

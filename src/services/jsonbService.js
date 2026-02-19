@@ -5,7 +5,8 @@
 
 import pg from 'pg';
 import './pgTypeParsers.js';
-import { createPoolConfig } from './dbConfig.js';
+import { createPoolConfig, isTransientDatabaseError } from './dbConfig.js';
+import logger from './loggerService.js';
 const { Pool } = pg;
 
 const pool = new Pool(
@@ -13,6 +14,18 @@ const pool = new Pool(
     application_name: 'discord-bot-jsonbService',
   })
 );
+
+pool.on('error', (error) => {
+  if (isTransientDatabaseError(error)) {
+    logger.warn('JSONB service pool connection dropped; reconnecting on demand.', {
+      module: 'database',
+      error,
+    });
+    return;
+  }
+
+  logger.discord.dbError('JSONB service pool error:', error);
+});
 
 /**
  * Get JSONB data for user
