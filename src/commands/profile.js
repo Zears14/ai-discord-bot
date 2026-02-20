@@ -22,7 +22,7 @@ class ProfileCommand extends BaseCommand {
       description: 'Displays your profile statistics.',
       category: 'Economy',
       usage: 'profile [@user]',
-      cooldown: 30, // 30 seconds
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.STATS,
       aliases: ['stats', 'user'],
     });
   }

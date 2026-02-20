@@ -12,7 +12,7 @@ class ActivityCommand extends BaseCommand {
       description: 'Shows recent activity for a user.',
       category: 'Economy',
       usage: 'activity [@user] [limit]',
-      cooldown: 30, // 30 seconds
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.STATS,
       aliases: ['history', 'recent'],
     });
   }

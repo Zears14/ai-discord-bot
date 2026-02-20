@@ -13,7 +13,7 @@ class GuildStatsCommand extends BaseCommand {
       description: 'Displays economy statistics for the server.',
       category: 'Economy',
       usage: 'guildstats',
-      cooldown: 60, // 60 seconds
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.STATS,
       aliases: ['serverstats', 'guildstat'],
     });
   }

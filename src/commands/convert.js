@@ -43,7 +43,7 @@ class ConvertCommand extends BaseCommand {
       description: 'Convert one currency to another',
       category: 'Utility',
       usage: 'convert <amount> <from> to <to>',
-      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.EXTERNAL_API,
       aliases: ['fx', 'currency', 'curr'],
     });
   }

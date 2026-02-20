@@ -35,6 +35,9 @@ export default {
     BLACKJACK_PAYOUT: 1.5,
     TIMEOUT: 30000,
     HIGH_TABLE_MIN_BET: 10000n,
+    DECKS: 6,
+    SHOE_RESHUFFLE_AT: 52,
+    SHOE_STATE_KEY: 'blackjackShoe',
   },
 
   // Embed colors

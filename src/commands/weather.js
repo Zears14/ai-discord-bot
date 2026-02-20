@@ -22,7 +22,7 @@ class WeatherCommand extends BaseCommand {
       description: 'Look up current weather for a location',
       category: 'Utility',
       usage: 'weather <location>',
-      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.EXTERNAL_API,
       aliases: ['wthr', 'wt', 'temp'],
     });
   }
