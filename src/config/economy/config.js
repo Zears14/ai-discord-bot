@@ -13,6 +13,7 @@ export default {
   // Economy Settings
   ECONOMY: {
     GROW_INTERVAL: 12, // hours
+    DAILY_REWARD_COOLDOWN_SECONDS: 86400, // 24 hours
     MIN_BALANCE: 0,
     RICH_THRESHOLD: 500,
     LEVELING: {

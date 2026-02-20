@@ -11,7 +11,7 @@ class DailyCommand extends BaseCommand {
       description: 'Claim your daily Dih reward',
       category: 'Economy',
       usage: 'daily',
-      cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
+      cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: [],
     });
   }
@@ -20,13 +20,13 @@ class DailyCommand extends BaseCommand {
     const userId = message.author.id;
     const guildId = message.guild.id;
     const dailyAmount = 25n; // Amount to be given daily
-    const dailyCooldownSeconds = 86400;
+    const dailyRewardCooldownSeconds = CONFIG.ECONOMY.DAILY_REWARD_COOLDOWN_SECONDS ?? 86400;
 
     // Check cooldown
     const lastDaily = await economy.getLastDaily(userId, guildId);
     const now = new Date();
-    if (lastDaily && now - lastDaily < dailyCooldownSeconds * 1000) {
-      const timeLeft = dailyCooldownSeconds * 1000 - (now - lastDaily);
+    if (lastDaily && now - lastDaily < dailyRewardCooldownSeconds * 1000) {
+      const timeLeft = dailyRewardCooldownSeconds * 1000 - (now - lastDaily);
       const hours = Math.floor(timeLeft / (1000 * 60 * 60));
       const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
 
