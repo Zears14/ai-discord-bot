@@ -31,8 +31,9 @@ class ProfileCommand extends BaseCommand {
     const target = message.mentions.users.first() || message.author;
     const guildId = message.guild.id;
     try {
-      const [userData, inventory, stats, levelData, targetMember] = await Promise.all([
+      const [userData, bankData, inventory, stats, levelData, targetMember] = await Promise.all([
         economy.getUserData(target.id, guildId),
+        economy.getBankData(target.id, guildId),
         inventoryService.getInventory(target.id, guildId),
         historyService.getUserStats(target.id, guildId),
         levelService.getLevelData(target.id, guildId),
@@ -71,8 +72,9 @@ class ProfileCommand extends BaseCommand {
             name: '💰 Economy',
             value: [
               `Balance: ${formatMoney(userData.balance)} cm`,
+              `Bank: ${formatMoney(bankData.bankBalance)} / ${formatMoney(bankData.bankMax)} cm`,
               `Inventory Worth: ${formatMoney(inventoryWorth)} cm`,
-              `Net Worth: ${formatMoney(userData.balance + inventoryWorth)} cm`,
+              `Net Worth: ${formatMoney(userData.balance + bankData.bankBalance + inventoryWorth)} cm`,
               `Inventory Items: ${inventory.length}`,
             ].join('\n'),
             inline: true,

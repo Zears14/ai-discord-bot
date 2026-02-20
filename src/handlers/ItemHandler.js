@@ -37,6 +37,25 @@ class ItemHandler {
           if (!dbItem) {
             await itemsService.createItem(item);
             logger.discord.db(`Loaded and created item: ${item.name}`);
+          } else {
+            const dbData = dbItem.data ?? {};
+            const itemData = item.data ?? {};
+            const shouldUpdate =
+              dbItem.title !== item.title ||
+              dbItem.type !== item.type ||
+              (dbItem.price ?? null) !== (item.price ?? null) ||
+              JSON.stringify(dbData) !== JSON.stringify(itemData);
+
+            if (shouldUpdate) {
+              await itemsService.updateItem(dbItem.id, {
+                name: item.name,
+                title: item.title,
+                type: item.type,
+                price: item.price ?? null,
+                data: itemData,
+              });
+              logger.discord.db(`Loaded and updated item: ${item.name}`);
+            }
           }
         } catch (error) {
           logger.discord.cmdError(`Failed to load item ${file}:`, error);

@@ -11,7 +11,7 @@ import historyService from './historyService.js';
 import jsonbService from './jsonbService.js';
 import logger from './loggerService.js';
 import CONFIG from '../config/config.js';
-import { ensurePgBigIntRange, toBigInt } from '../utils/moneyUtils.js';
+import { ensurePgBigIntRange, parsePositiveAmount, toBigInt } from '../utils/moneyUtils.js';
 
 // Enhanced connection pool with better configuration
 const pool = new Pool(
@@ -51,6 +51,21 @@ const CACHE_TTL = 60000; // 1 minute cache
 const DEFAULT_BALANCE = toBigInt(CONFIG.DATABASE.DEFAULT_BALANCE ?? 0, 'Default balance');
 const MIN_BALANCE = toBigInt(CONFIG.ECONOMY.MIN_BALANCE ?? 0, 'Minimum balance');
 const RICH_THRESHOLD = toBigInt(CONFIG.ECONOMY.RICH_THRESHOLD ?? 10000, 'Rich threshold');
+const BANK_BALANCE_KEY = CONFIG.ECONOMY.BANK?.BALANCE_KEY ?? 'bankBalance';
+const BANK_MAX_KEY = CONFIG.ECONOMY.BANK?.MAX_KEY ?? 'bankMax';
+const BANK_DEFAULT_MAX = toBigInt(CONFIG.ECONOMY.BANK?.DEFAULT_MAX ?? 100, 'Default bank max');
+const BANK_NOTE_MIN_INCREASE = toBigInt(
+  CONFIG.ECONOMY.BANK?.BANK_NOTE?.MIN_INCREASE ?? 10,
+  'Bank note minimum increase'
+);
+const BANK_NOTE_CURRENT_MAX_BPS = Math.max(
+  0,
+  Math.floor(Number(CONFIG.ECONOMY.BANK?.BANK_NOTE?.CURRENT_MAX_BPS ?? 1200))
+);
+const BANK_NOTE_LEVEL_BONUS_PER_LEVEL = toBigInt(
+  CONFIG.ECONOMY.BANK?.BANK_NOTE?.LEVEL_BONUS_PER_LEVEL ?? 4,
+  'Bank note level bonus'
+);
 
 /**
  * Cache utilities
@@ -142,6 +157,104 @@ async function safeQuery(query, params = [], retries = 3) {
       await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 1000));
     }
   }
+}
+
+function parseBankValues(row) {
+  const bankBalance = toBigInt(row?.bank_balance ?? 0, 'Bank balance');
+  let bankMax = toBigInt(row?.bank_max ?? BANK_DEFAULT_MAX, 'Bank max');
+  if (bankMax < BANK_DEFAULT_MAX) {
+    bankMax = BANK_DEFAULT_MAX;
+  }
+  if (bankMax < bankBalance) {
+    bankMax = bankBalance;
+  }
+
+  return { bankBalance, bankMax };
+}
+
+function calculateBankNoteIncrease(currentMax, level) {
+  const parsedCurrentMax = toBigInt(currentMax, 'Current bank max');
+  const parsedLevel = Math.max(1, Math.floor(Number(level) || 1));
+  const scaledFromMax = (parsedCurrentMax * BigInt(BANK_NOTE_CURRENT_MAX_BPS)) / 10000n;
+  const levelBonus = BigInt(parsedLevel) * BANK_NOTE_LEVEL_BONUS_PER_LEVEL;
+  const increase = scaledFromMax + levelBonus;
+  return increase >= BANK_NOTE_MIN_INCREASE ? increase : BANK_NOTE_MIN_INCREASE;
+}
+
+async function getOrCreateLockedEconomyRow(client, userId, guildId) {
+  let row = await client.query(
+    `SELECT balance,
+              COALESCE(data->>$3, '0') as bank_balance,
+              COALESCE(data->>$4, $5) as bank_max
+         FROM economy
+         WHERE userid = $1 AND guildid = $2
+         FOR UPDATE`,
+    [userId, guildId, BANK_BALANCE_KEY, BANK_MAX_KEY, BANK_DEFAULT_MAX.toString()]
+  );
+
+  if (row.rowCount > 0) {
+    return row.rows[0];
+  }
+
+  await client.query(
+    `INSERT INTO economy (userid, guildid, balance, lastgrow, data)
+         VALUES ($1, $2, $3, $4, jsonb_build_object($5, $6, $7, $8))
+         ON CONFLICT (userid, guildid) DO NOTHING`,
+    [
+      userId,
+      guildId,
+      DEFAULT_BALANCE,
+      new Date(0),
+      BANK_BALANCE_KEY,
+      '0',
+      BANK_MAX_KEY,
+      BANK_DEFAULT_MAX.toString(),
+    ]
+  );
+
+  row = await client.query(
+    `SELECT balance,
+              COALESCE(data->>$3, '0') as bank_balance,
+              COALESCE(data->>$4, $5) as bank_max
+         FROM economy
+         WHERE userid = $1 AND guildid = $2
+         FOR UPDATE`,
+    [userId, guildId, BANK_BALANCE_KEY, BANK_MAX_KEY, BANK_DEFAULT_MAX.toString()]
+  );
+
+  if (row.rowCount === 0) {
+    throw new Error('Failed to initialize user economy row');
+  }
+
+  return row.rows[0];
+}
+
+async function persistBankState(client, userId, guildId, walletBalance, bankBalance, bankMax) {
+  await client.query(
+    `UPDATE economy
+         SET balance = $3,
+             data = jsonb_set(
+               jsonb_set(
+                 COALESCE(data, '{}'::jsonb),
+                 ARRAY[$4]::text[],
+                 to_jsonb($5::text),
+                 true
+               ),
+               ARRAY[$6]::text[],
+               to_jsonb($7::text),
+               true
+             )
+         WHERE userid = $1 AND guildid = $2`,
+    [
+      userId,
+      guildId,
+      walletBalance,
+      BANK_BALANCE_KEY,
+      bankBalance.toString(),
+      BANK_MAX_KEY,
+      bankMax.toString(),
+    ]
+  );
 }
 
 /**
@@ -865,6 +978,198 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
 }
 
 /**
+ * Get wallet + bank balances and capacity.
+ */
+async function getBankData(userId, guildId) {
+  await getUserData(userId, guildId);
+  const res = await safeQuery(
+    `SELECT balance,
+            COALESCE(data->>$3, '0') as bank_balance,
+            COALESCE(data->>$4, $5) as bank_max
+       FROM economy
+       WHERE userid = $1 AND guildid = $2`,
+    [userId, guildId, BANK_BALANCE_KEY, BANK_MAX_KEY, BANK_DEFAULT_MAX.toString()]
+  );
+
+  if (res.rowCount === 0) {
+    return {
+      walletBalance: DEFAULT_BALANCE,
+      bankBalance: 0n,
+      bankMax: BANK_DEFAULT_MAX,
+      availableSpace: BANK_DEFAULT_MAX,
+      totalBalance: DEFAULT_BALANCE,
+    };
+  }
+
+  const walletBalance = toBigInt(res.rows[0].balance ?? 0n, 'Wallet balance');
+  const { bankBalance, bankMax } = parseBankValues(res.rows[0]);
+  const availableSpace = bankMax > bankBalance ? bankMax - bankBalance : 0n;
+
+  return {
+    walletBalance,
+    bankBalance,
+    bankMax,
+    availableSpace,
+    totalBalance: walletBalance + bankBalance,
+  };
+}
+
+/**
+ * Move funds from wallet to bank.
+ */
+async function depositToBank(userId, guildId, amount) {
+  const parsedAmount = parsePositiveAmount(amount, 'Deposit amount');
+
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const walletBalance = toBigInt(row.balance ?? 0n, 'Wallet balance');
+    const { bankBalance, bankMax } = parseBankValues(row);
+    const availableSpace = bankMax > bankBalance ? bankMax - bankBalance : 0n;
+
+    if (walletBalance < parsedAmount) {
+      throw new Error(
+        `Insufficient wallet balance. Wallet: ${walletBalance}, requested: ${parsedAmount}`
+      );
+    }
+
+    if (availableSpace < parsedAmount) {
+      throw new Error(
+        `Bank capacity exceeded. Available bank space: ${availableSpace}, requested: ${parsedAmount}`
+      );
+    }
+
+    const newWalletBalance = walletBalance - parsedAmount;
+    const newBankBalance = bankBalance + parsedAmount;
+
+    if (newWalletBalance < MIN_BALANCE) {
+      throw new Error(
+        `Deposit would violate minimum wallet balance. Minimum wallet balance is ${MIN_BALANCE}.`
+      );
+    }
+
+    ensurePgBigIntRange(newWalletBalance, 'Wallet balance after deposit');
+    ensurePgBigIntRange(newBankBalance, 'Bank balance after deposit');
+
+    await persistBankState(client, userId, guildId, newWalletBalance, newBankBalance, bankMax);
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'bank-deposit',
+        amount: 0n,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return {
+      movedAmount: parsedAmount,
+      walletBalance: newWalletBalance,
+      bankBalance: newBankBalance,
+      bankMax,
+      availableSpace: bankMax > newBankBalance ? bankMax - newBankBalance : 0n,
+    };
+  });
+}
+
+/**
+ * Move funds from bank to wallet.
+ */
+async function withdrawFromBank(userId, guildId, amount) {
+  const parsedAmount = parsePositiveAmount(amount, 'Withdraw amount');
+
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const walletBalance = toBigInt(row.balance ?? 0n, 'Wallet balance');
+    const { bankBalance, bankMax } = parseBankValues(row);
+
+    if (bankBalance < parsedAmount) {
+      throw new Error(
+        `Insufficient bank balance. Bank: ${bankBalance}, requested: ${parsedAmount}`
+      );
+    }
+
+    const newWalletBalance = walletBalance + parsedAmount;
+    const newBankBalance = bankBalance - parsedAmount;
+    ensurePgBigIntRange(newWalletBalance, 'Wallet balance after withdrawal');
+    ensurePgBigIntRange(newBankBalance, 'Bank balance after withdrawal');
+
+    await persistBankState(client, userId, guildId, newWalletBalance, newBankBalance, bankMax);
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'bank-withdraw',
+        amount: 0n,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return {
+      movedAmount: parsedAmount,
+      walletBalance: newWalletBalance,
+      bankBalance: newBankBalance,
+      bankMax,
+      availableSpace: bankMax > newBankBalance ? bankMax - newBankBalance : 0n,
+    };
+  });
+}
+
+/**
+ * Increase max bank capacity using upgrade items.
+ */
+async function expandBankCapacity(userId, guildId, quantity = 1, level = 1) {
+  const parsedQuantity = parsePositiveAmount(quantity, 'Quantity');
+  const parsedLevel = Math.max(1, Math.floor(Number(level) || 1));
+
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const walletBalance = toBigInt(row.balance ?? 0n, 'Wallet balance');
+    const { bankBalance, bankMax: initialBankMax } = parseBankValues(row);
+    let bankMax = initialBankMax;
+
+    let totalIncrease = 0n;
+    let used = 0n;
+    while (used < parsedQuantity) {
+      const increase = calculateBankNoteIncrease(bankMax, parsedLevel);
+      bankMax += increase;
+      totalIncrease += increase;
+      used++;
+    }
+
+    ensurePgBigIntRange(bankMax, 'Bank max after upgrade');
+
+    await persistBankState(client, userId, guildId, walletBalance, bankBalance, bankMax);
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'bank-capacity-upgrade',
+        amount: 0n,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return {
+      quantity: parsedQuantity,
+      totalIncrease,
+      bankMax,
+      bankBalance,
+      availableSpace: bankMax > bankBalance ? bankMax - bankBalance : 0n,
+      level: parsedLevel,
+    };
+  });
+}
+
+/**
  * Get last daily timestamp from JSONB
  */
 async function getLastDaily(userId, guildId) {
@@ -1029,6 +1334,10 @@ export default {
   getUserData,
   getUserRank,
   transferBalance,
+  getBankData,
+  depositToBank,
+  withdrawFromBank,
+  expandBankCapacity,
   getGuildStats,
   healthCheck,
   initializeDatabase,

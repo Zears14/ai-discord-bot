@@ -120,7 +120,7 @@ class RobCommand extends BaseCommand {
       }
 
       if (victimBalance <= 0n) {
-        return message.reply(`${victim.username} has no Dih to steal.`);
+        return message.reply(`${victim.username} has no wallet Dih to steal.`);
       }
 
       const now = BigInt(Date.now());
@@ -194,12 +194,12 @@ class RobCommand extends BaseCommand {
             { name: 'Success Chance', value: formatPercent(successChance), inline: true },
             { name: 'Stolen %', value: formatPercent(stealPercent), inline: true },
             {
-              name: 'Your New Balance',
+              name: 'Your New Wallet',
               value: `${formatMoney(transfer.to.newBalance)} cm`,
               inline: true,
             },
             {
-              name: `${victim.username}'s Balance`,
+              name: `${victim.username}'s Wallet`,
               value: `${formatMoney(transfer.from.newBalance)} cm`,
               inline: true,
             },
@@ -237,12 +237,12 @@ class RobCommand extends BaseCommand {
           { name: 'Success Chance', value: formatPercent(successChance), inline: true },
           { name: 'Fine %', value: formatPercent(finePercent), inline: true },
           {
-            name: 'Your New Balance',
+            name: 'Your New Wallet',
             value: `${formatMoney(transfer.from.newBalance)} cm`,
             inline: true,
           },
           {
-            name: `${victim.username}'s Balance`,
+            name: `${victim.username}'s Wallet`,
             value: `${formatMoney(transfer.to.newBalance)} cm`,
             inline: true,
           }

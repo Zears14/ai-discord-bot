@@ -30,7 +30,10 @@ class BalanceCommand extends BaseCommand {
       targetUser = message.author;
     }
 
-    const balance = await economy.getBalance(targetUser.id, guildId);
+    const [balance, bankData] = await Promise.all([
+      economy.getBalance(targetUser.id, guildId),
+      economy.getBankData(targetUser.id, guildId),
+    ]);
 
     // Create embed
     const embed = new EmbedBuilder()
@@ -39,7 +42,13 @@ class BalanceCommand extends BaseCommand {
       .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
       .addFields(
         { name: 'User', value: targetUser.username, inline: true },
-        { name: 'Length', value: `${formatMoney(balance)} cm`, inline: true }
+        { name: 'Wallet', value: `${formatMoney(balance)} cm`, inline: true },
+        {
+          name: 'Bank',
+          value: `${formatMoney(bankData.bankBalance)} / ${formatMoney(bankData.bankMax)} cm`,
+          inline: true,
+        },
+        { name: 'Total', value: `${formatMoney(bankData.totalBalance)} cm`, inline: true }
       )
       .setFooter({
         text:

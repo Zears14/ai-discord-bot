@@ -27,7 +27,7 @@ class LeaderboardCommand extends BaseCommand {
       const embed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.DEFAULT)
         .setTitle('🏆 Dih Leaderboard')
-        .setDescription('Top users by Dih balance')
+        .setDescription('Top users by wallet Dih balance')
         .setTimestamp();
 
       // Add fields for each user

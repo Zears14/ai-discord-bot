@@ -24,6 +24,16 @@ export default {
       BASE_XP_TO_LEVEL: 100,
       XP_GROWTH_BPS: 11750, // 1.175x per level (basis points)
     },
+    BANK: {
+      BALANCE_KEY: 'bankBalance',
+      MAX_KEY: 'bankMax',
+      DEFAULT_MAX: 100,
+      BANK_NOTE: {
+        MIN_INCREASE: 10,
+        CURRENT_MAX_BPS: 1200, // +12% of current max
+        LEVEL_BONUS_PER_LEVEL: 4, // +4 per level
+      },
+    },
     GROW_SCALING: {
       BASE_MIN: 8,
       BASE_MAX: 30,

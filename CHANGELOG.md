@@ -14,12 +14,17 @@ All notable user-facing changes to this bot are documented here.
 - New `shop` command:
   - `shop [page]`
   - `shop buy <item_name> [quantity]`
+- New `bank` command:
+  - `bank`
+  - `bank deposit <amount|all>`
+  - `bank withdraw <amount|all>`
 - Expanded item catalog with new usable consumables:
   - `snack_pack`
   - `coffee_thermos`
   - `scratch_ticket`
   - `payday_box`
   - `vault_key`
+  - `bank_note`
 
 ### Changed
 - `blackjack` updates:
@@ -39,6 +44,10 @@ All notable user-facing changes to this bot are documented here.
   - Successful job change resets work cooldown and progress.
   - Denied applications still consume fee but keep current job and work progress.
 - `profile` embed was cleaned up into clearer grouped sections.
+- Wallet and bank balances are now separated:
+  - Banked money is protected from `rob`.
+  - Default max bank storage starts at `100`.
+  - `bank_note` upgrades max bank storage based on current max capacity and level.
 - Level scaling changed from linear to exponential growth.
 - Invalid command usage no longer consumes command cooldown.
 - Command cooldowns were rebalanced to be less restrictive:
