@@ -308,7 +308,7 @@ class CommandHandler {
       const shouldSkipCooldown = this.shouldSkipCooldown(executionResult);
       if (!shouldSkipCooldown) {
         this.setCooldown(message.author.id, command);
-        await levelService
+        const xpResult = await levelService
           .awardCommandXp(message.author.id, message.guild.id, command.name)
           .catch((error) => {
             logger.discord.cmdError('Failed to award command XP:', {
@@ -317,7 +317,21 @@ class CommandHandler {
               command: command.name,
               error,
             });
+            return null;
           });
+
+        if (xpResult?.leveledUp) {
+          await message.channel
+            .send(`🎉 ${message.author}, you reached **Level ${xpResult.level}**!`)
+            .catch((error) => {
+              logger.discord.cmdError('Failed to send level up message:', {
+                userId: message.author.id,
+                guildId: message.guild.id,
+                command: command.name,
+                error,
+              });
+            });
+        }
       }
     }
   }
