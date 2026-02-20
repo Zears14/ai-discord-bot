@@ -11,6 +11,14 @@ function getProductionSslConfig() {
   return { rejectUnauthorized };
 }
 
+function parseBooleanEnv(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
 function isTransientDatabaseError(error) {
   if (!error || typeof error !== 'object') return false;
 
@@ -45,18 +53,27 @@ function isTransientDatabaseError(error) {
 }
 
 function createPoolConfig(overrides = {}) {
+  const isProduction = process.env.IS_DEVEL !== 'true';
   const config = {
     connectionString: process.env.POSTGRES_URI,
     ...overrides,
   };
 
-  if (process.env.IS_DEVEL !== 'true') {
+  if (isProduction) {
     const overrideSsl =
       typeof overrides.ssl === 'object' && overrides.ssl !== null ? overrides.ssl : {};
     config.ssl = {
       ...getProductionSslConfig(),
       ...overrideSsl,
     };
+  }
+
+  if (typeof overrides.enableChannelBinding === 'boolean') {
+    config.enableChannelBinding = overrides.enableChannelBinding;
+  } else {
+    const fromEnv = parseBooleanEnv(process.env.PG_ENABLE_CHANNEL_BINDING);
+    // Production defaults to channel binding on. Development defaults off unless explicitly enabled.
+    config.enableChannelBinding = fromEnv ?? isProduction;
   }
 
   return config;
