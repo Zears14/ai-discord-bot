@@ -20,7 +20,7 @@ export default {
     REWARD_CAP_BASE: 180, // fixed cap cushion
     REWARD_BALANCE_CAP_BPS: 70, // plus 0.70% of total balance
   },
-  BREAK_CHANCE_BPS: 3200, // 32%
+  BREAK_CHANCE_BPS: 1500, // 15%
   DEATH_CHANCE_BPS: 800, // 8%
   DEATH_LOSS_MIN_PERCENT: 25,
   DEATH_LOSS_MAX_PERCENT: 75,
