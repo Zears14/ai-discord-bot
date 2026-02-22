@@ -1,7 +1,14 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  MessageFlags,
+} from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import commandSessionService from '../services/commandSessionService.js';
+import deployLockService from '../services/deployLockService.js';
 
 const COMMANDS_PER_CATEGORY_PAGE = 8;
 const HELP_COLLECTOR_TIMEOUT_MS = 300000;
@@ -205,6 +212,34 @@ function buildPages(commands, prefix) {
   return pages;
 }
 
+function scheduleHelpTimeout(helpMessage) {
+  const messageId = helpMessage.id;
+  const timeoutHandle = setTimeout(async () => {
+    try {
+      const lockAcquired = await deployLockService.acquireLock(`help:timeout:${messageId}`, 15);
+      if (!lockAcquired) {
+        return;
+      }
+
+      const session = await commandSessionService.getSession('help', messageId);
+      if (!session) {
+        return;
+      }
+
+      if (Number(session.expiresAt || 0) > Date.now()) {
+        return;
+      }
+
+      await commandSessionService.deleteSession('help', messageId);
+      await helpMessage.edit({ components: [] }).catch(() => {});
+    } catch {
+      // Best-effort timeout cleanup.
+    }
+  }, HELP_COLLECTOR_TIMEOUT_MS + 250);
+
+  timeoutHandle.unref?.();
+}
+
 class HelpCommand extends BaseCommand {
   constructor(client) {
     super(client, {
@@ -255,6 +290,7 @@ class HelpCommand extends BaseCommand {
       },
       Math.ceil(HELP_COLLECTOR_TIMEOUT_MS / 1000) + 10
     );
+    scheduleHelpTimeout(helpMessage);
 
     return null;
   }
@@ -269,11 +305,20 @@ class HelpCommand extends BaseCommand {
     const session = await commandSessionService.getSession('help', interaction.message.id);
     if (!session) {
       await interaction
-        .reply({
-          content: 'This help menu has expired. Run `help` again.',
-          ephemeral: true,
+        .update({
+          components: [],
         })
-        .catch(() => {});
+        .catch(async () => {
+          await interaction.message.edit({ components: [] }).catch(() => {});
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction
+              .reply({
+                content: 'This help menu has expired. Run `help` again.',
+                flags: MessageFlags.Ephemeral,
+              })
+              .catch(() => {});
+          }
+        });
       return;
     }
 
@@ -281,7 +326,7 @@ class HelpCommand extends BaseCommand {
       await interaction
         .reply({
           content: 'These buttons are not for you!',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
       return;

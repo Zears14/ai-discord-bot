@@ -3,6 +3,7 @@
  * @module commands/dice
  */
 
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
@@ -63,7 +64,7 @@ class DiceCommand extends BaseCommand {
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      const roll = Math.floor(Math.random() * 6) + 1;
+      const roll = randomInt(1, 7);
       const win = roll === pickedNumber;
       const payout = win ? bet * 6n : 0n;
 

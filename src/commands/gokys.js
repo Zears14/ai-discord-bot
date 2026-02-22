@@ -23,7 +23,8 @@ function pickRandom(values, fallback = '') {
 
 function computePercentLoss(balance, percent) {
   if (balance <= 0n) return 0n;
-  return (balance * BigInt(percent)) / 100n;
+  const loss = (balance * BigInt(percent)) / 100n;
+  return loss > 0n ? loss : 1n;
 }
 
 function sleep(ms) {

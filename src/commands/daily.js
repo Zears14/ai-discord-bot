@@ -2,6 +2,7 @@ import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import jsonbService from '../services/jsonbService.js';
 import { formatMoney } from '../utils/moneyUtils.js';
 
 class DailyCommand extends BaseCommand {
@@ -21,12 +22,31 @@ class DailyCommand extends BaseCommand {
     const guildId = message.guild.id;
     const dailyAmount = 25n; // Amount to be given daily
     const dailyRewardCooldownSeconds = CONFIG.ECONOMY.DAILY_REWARD_COOLDOWN_SECONDS ?? 86400;
+    const cooldownKey = 'dailyRewardCooldownUntil';
+    const now = Date.now();
+    const cooldownMs = dailyRewardCooldownSeconds * 1000;
 
-    // Check cooldown
-    const lastDaily = await economy.getLastDaily(userId, guildId);
-    const now = new Date();
-    if (lastDaily && now - lastDaily < dailyRewardCooldownSeconds * 1000) {
-      const timeLeft = dailyRewardCooldownSeconds * 1000 - (now - lastDaily);
+    let cooldownLock = await jsonbService.acquireTimedKey(
+      userId,
+      guildId,
+      cooldownKey,
+      now + cooldownMs,
+      now
+    );
+
+    if (!cooldownLock.acquired && Number(cooldownLock.value ?? 0n) <= 0) {
+      await jsonbService.setKey(userId, guildId, cooldownKey, 0);
+      cooldownLock = await jsonbService.acquireTimedKey(
+        userId,
+        guildId,
+        cooldownKey,
+        now + cooldownMs,
+        now
+      );
+    }
+
+    if (!cooldownLock.acquired && Number(cooldownLock.value ?? 0n) > now) {
+      const timeLeft = Number(cooldownLock.value) - now;
       const hours = Math.floor(timeLeft / (1000 * 60 * 60));
       const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
 

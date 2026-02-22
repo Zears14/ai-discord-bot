@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
@@ -42,9 +43,9 @@ class SlotsCommand extends BaseCommand {
       betDeducted = true;
 
       const reels = ['🍒', '🍊', '🍋', '🍇', '🍉', '🍓', '⭐', '💎'];
-      const reel1 = reels[Math.floor(Math.random() * reels.length)];
-      const reel2 = reels[Math.floor(Math.random() * reels.length)];
-      const reel3 = reels[Math.floor(Math.random() * reels.length)];
+      const reel1 = reels[randomInt(reels.length)];
+      const reel2 = reels[randomInt(reels.length)];
+      const reel3 = reels[randomInt(reels.length)];
 
       // Create initial embed with empty slots
       const initialEmbed = new EmbedBuilder()

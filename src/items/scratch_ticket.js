@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import economy from '../services/economy.js';
 import { formatMoney, toBigInt } from '../utils/moneyUtils.js';
 
@@ -5,7 +6,7 @@ function randomPerItemReward() {
   const min = 0n;
   const max = 1800n;
   const spread = Number(max - min + 1n);
-  return min + BigInt(Math.floor(Math.random() * spread));
+  return min + BigInt(randomInt(spread));
 }
 
 export default {

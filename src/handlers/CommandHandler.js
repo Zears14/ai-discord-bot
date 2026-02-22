@@ -6,7 +6,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { Collection } from 'discord.js';
+import { Collection, MessageFlags } from 'discord.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import CONFIG from '../config/config.js';
@@ -152,7 +152,7 @@ class CommandHandler {
    * @returns {number} Remaining cooldown time in seconds
    */
   async getCooldownRemaining(userId, guildId, command) {
-    const cooldownAmount = (command.cooldown ?? CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
+    const cooldownAmount = this.getCooldownAmountMs(command);
     if (cooldownAmount <= 0) {
       return 0;
     }
@@ -190,7 +190,7 @@ class CommandHandler {
    */
   async setCooldown(userId, guildId, command) {
     const now = Date.now();
-    const cooldownAmount = (command.cooldown ?? CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
+    const cooldownAmount = this.getCooldownAmountMs(command);
     if (cooldownAmount <= 0) return;
     const expiresAt = now + cooldownAmount;
     const timestamps =
@@ -199,6 +199,56 @@ class CommandHandler {
     timestamps.set(userId, expiresAt);
 
     await commandSessionService.setCommandCooldown(userId, guildId, command.name, expiresAt);
+  }
+
+  getCooldownAmountMs(command) {
+    return (command.cooldown ?? CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
+  }
+
+  async reserveCooldown(userId, guildId, command) {
+    const cooldownAmount = this.getCooldownAmountMs(command);
+    if (cooldownAmount <= 0) {
+      return { reserved: true, remainingSeconds: 0 };
+    }
+
+    const now = Date.now();
+    const expiresAt = now + cooldownAmount;
+    const timestamps =
+      this.cooldowns.get(command.name) ||
+      this.cooldowns.set(command.name, new Collection()).get(command.name);
+    const localExpiry = timestamps.get(userId);
+
+    if (localExpiry && now < localExpiry) {
+      return {
+        reserved: false,
+        remainingSeconds: Math.max(0, (localExpiry - now) / 1000),
+      };
+    }
+
+    const remoteReservation = await commandSessionService.reserveCommandCooldown(
+      userId,
+      guildId,
+      command.name,
+      expiresAt
+    );
+    if (!remoteReservation.reserved && remoteReservation.remainingSeconds > 0) {
+      return remoteReservation;
+    }
+
+    timestamps.set(userId, expiresAt);
+    return { reserved: true, remainingSeconds: 0 };
+  }
+
+  async clearCooldown(userId, guildId, command) {
+    const timestamps = this.cooldowns.get(command.name);
+    if (timestamps) {
+      timestamps.delete(userId);
+      if (timestamps.size === 0) {
+        this.cooldowns.delete(command.name);
+      }
+    }
+
+    await commandSessionService.clearCommandCooldown(userId, guildId, command.name);
   }
 
   /**
@@ -416,7 +466,7 @@ class CommandHandler {
         await interaction
           .reply({
             content: 'An unexpected error occurred while handling this interaction.',
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           })
           .catch(() => {});
       }
@@ -431,6 +481,7 @@ class CommandHandler {
   async handleMessage(message) {
     // Early returns for better performance
     if (message.author.bot || message.system) return;
+    if (!message.guild) return;
 
     const prefix = message.content.startsWith(CONFIG.MESSAGE.PREFIX) ? CONFIG.MESSAGE.PREFIX : null;
     if (!prefix) return;
@@ -498,6 +549,20 @@ class CommandHandler {
     let executionResult;
     let didThrow = false;
     let acquiredExclusiveSession = false;
+    let exclusiveSessionToken = null;
+    let reservedCooldown = false;
+
+    const cooldownReservation = await this.reserveCooldown(
+      message.author.id,
+      message.guild.id,
+      command
+    );
+    if (!cooldownReservation.reserved) {
+      return message.reply(
+        `Please wait ${cooldownReservation.remainingSeconds.toFixed(1)} more second(s) before using the \`${command.name}\` command.`
+      );
+    }
+    reservedCooldown = true;
 
     try {
       if (hasExclusiveSession) {
@@ -508,7 +573,13 @@ class CommandHandler {
           command.exclusiveSessionTtlSeconds ?? 60
         );
         acquiredExclusiveSession = lockResult.acquired;
+        exclusiveSessionToken = lockResult.token || null;
+        message.__exclusiveSessionToken = exclusiveSessionToken;
         if (!lockResult.acquired) {
+          if (reservedCooldown) {
+            await this.clearCooldown(message.author.id, message.guild.id, command);
+            reservedCooldown = false;
+          }
           const lockedBy = lockResult.session?.commandName || 'another command';
           return message.reply(
             `You already have an active \`${lockedBy}\` session. Finish it before starting another command.`
@@ -527,38 +598,44 @@ class CommandHandler {
       );
 
       if (hasExclusiveSession && acquiredExclusiveSession && (!keepExclusiveSession || didThrow)) {
-        await commandSessionService.releaseExclusiveSession(message.author.id, message.guild.id);
+        await commandSessionService.releaseExclusiveSession(
+          message.author.id,
+          message.guild.id,
+          exclusiveSessionToken
+        );
       }
     }
 
-    if (!didThrow) {
-      const shouldSkipCooldown = this.shouldSkipCooldown(executionResult);
-      if (!shouldSkipCooldown) {
-        await this.setCooldown(message.author.id, message.guild.id, command);
-        const xpResult = await levelService
-          .awardCommandXp(message.author.id, message.guild.id, command.name)
+    const shouldSkipCooldown = didThrow ? true : this.shouldSkipCooldown(executionResult);
+    if (shouldSkipCooldown && reservedCooldown) {
+      await this.clearCooldown(message.author.id, message.guild.id, command);
+      reservedCooldown = false;
+    }
+
+    if (!didThrow && !shouldSkipCooldown) {
+      const xpResult = await levelService
+        .awardCommandXp(message.author.id, message.guild.id, command.name)
+        .catch((error) => {
+          logger.discord.cmdError('Failed to award command XP:', {
+            userId: message.author.id,
+            guildId: message.guild.id,
+            command: command.name,
+            error,
+          });
+          return null;
+        });
+
+      if (xpResult?.leveledUp) {
+        await message.channel
+          .send(`🎉 ${message.author}, you reached **Level ${xpResult.level}**!`)
           .catch((error) => {
-            logger.discord.cmdError('Failed to award command XP:', {
+            logger.discord.cmdError('Failed to send level up message:', {
               userId: message.author.id,
               guildId: message.guild.id,
               command: command.name,
               error,
             });
-            return null;
           });
-
-        if (xpResult?.leveledUp) {
-          await message.channel
-            .send(`🎉 ${message.author}, you reached **Level ${xpResult.level}**!`)
-            .catch((error) => {
-              logger.discord.cmdError('Failed to send level up message:', {
-                userId: message.author.id,
-                guildId: message.guild.id,
-                command: command.name,
-                error,
-              });
-            });
-        }
       }
     }
   }

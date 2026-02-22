@@ -3,6 +3,7 @@
  * @module commands/coinflip
  */
 
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
@@ -70,7 +71,7 @@ class CoinflipCommand extends BaseCommand {
 
       await new Promise((resolve) => setTimeout(resolve, 900));
 
-      const result = Math.random() < 0.5 ? 'heads' : 'tails';
+      const result = randomInt(2) === 0 ? 'heads' : 'tails';
       const win = result === choice;
       const payout = win ? bet * 2n : 0n;
 

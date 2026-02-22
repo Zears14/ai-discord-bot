@@ -1,5 +1,11 @@
 import { randomInt } from 'node:crypto';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  MessageFlags,
+} from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import commandSessionService from '../services/commandSessionService.js';
@@ -24,6 +30,51 @@ function buildWagerButtons(disabled = false) {
       .setEmoji('❌')
       .setDisabled(disabled)
   );
+}
+
+function scheduleWagerTimeout(wagerMessage) {
+  const messageId = wagerMessage.id;
+  const timeoutHandle = setTimeout(async () => {
+    try {
+      const lockAcquired = await deployLockService.acquireLock(`wager:timeout:${messageId}`, 15);
+      if (!lockAcquired) {
+        return;
+      }
+
+      const session = await commandSessionService.getSession('wager', messageId);
+      if (!session) {
+        return;
+      }
+
+      const now = Date.now();
+      const expiresAt = Number(session.expiresAt || 0);
+      if (Boolean(session.resolved) || expiresAt > now) {
+        return;
+      }
+
+      await commandSessionService.deleteSession('wager', messageId);
+      await commandSessionService.releaseExclusiveSession(
+        session.challengerId,
+        session.guildId,
+        session.exclusiveSessionToken || null
+      );
+
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.ERROR)
+        .setTitle('⏰ Wager Timed Out')
+        .setDescription('The wager request has expired.')
+        .setTimestamp();
+
+      await wagerMessage.edit({
+        embeds: [timeoutEmbed],
+        components: [],
+      });
+    } catch {
+      // Best-effort timeout cleanup.
+    }
+  }, WAGER_TIMEOUT_MS + 250);
+
+  timeoutHandle.unref?.();
 }
 
 class WagerCommand extends BaseCommand {
@@ -143,6 +194,7 @@ class WagerCommand extends BaseCommand {
       {
         challengerId: userId,
         challengerName: message.author.username,
+        exclusiveSessionToken: message.__exclusiveSessionToken || null,
         targetUserId: targetUser.id,
         targetName: targetUser.username,
         guildId,
@@ -154,7 +206,11 @@ class WagerCommand extends BaseCommand {
     );
 
     if (!stored) {
-      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await commandSessionService.releaseExclusiveSession(
+        userId,
+        guildId,
+        message.__exclusiveSessionToken || null
+      );
       await wagerMessage
         .edit({
           embeds: [
@@ -170,6 +226,7 @@ class WagerCommand extends BaseCommand {
       return { skipCooldown: true };
     }
 
+    scheduleWagerTimeout(wagerMessage);
     return { keepExclusiveSession: true };
   }
 
@@ -181,7 +238,8 @@ class WagerCommand extends BaseCommand {
     }
 
     const messageId = interaction.message.id;
-    const lockAcquired = await deployLockService.acquireLock(`wager:session:${messageId}`, 5);
+    const lockKey = interaction.id || `wager:fallback:${messageId}:${interaction.user.id}`;
+    const lockAcquired = await deployLockService.acquireLock(`wager:interaction:${lockKey}`, 15);
     if (!lockAcquired) {
       await interaction.deferUpdate().catch(() => {});
       return;
@@ -189,12 +247,30 @@ class WagerCommand extends BaseCommand {
 
     const session = await commandSessionService.getSession('wager', messageId);
     if (!session) {
+      const expiredEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.ERROR)
+        .setTitle('⏰ Wager Expired')
+        .setDescription('This wager has already expired.')
+        .setTimestamp();
+
       await interaction
-        .reply({
-          content: 'This wager has already expired.',
-          ephemeral: true,
+        .update({
+          embeds: [expiredEmbed],
+          components: [],
         })
-        .catch(() => {});
+        .catch(async () => {
+          await interaction.message
+            .edit({ embeds: [expiredEmbed], components: [] })
+            .catch(() => {});
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction
+              .reply({
+                content: 'This wager has already expired.',
+                flags: MessageFlags.Ephemeral,
+              })
+              .catch(() => {});
+          }
+        });
       return;
     }
 
@@ -202,7 +278,7 @@ class WagerCommand extends BaseCommand {
       await interaction
         .reply({
           content: 'Only the challenged user can respond to this wager.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
       return;
@@ -212,7 +288,11 @@ class WagerCommand extends BaseCommand {
     const expiresAt = Number(session.expiresAt || 0);
     if (Boolean(session.resolved) || expiresAt <= now) {
       await commandSessionService.deleteSession('wager', messageId);
-      await commandSessionService.releaseExclusiveSession(session.challengerId, session.guildId);
+      await commandSessionService.releaseExclusiveSession(
+        session.challengerId,
+        session.guildId,
+        session.exclusiveSessionToken || null
+      );
 
       const timeoutEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.ERROR)
@@ -276,7 +356,11 @@ class WagerCommand extends BaseCommand {
     });
 
     await commandSessionService.deleteSession('wager', messageId);
-    await commandSessionService.releaseExclusiveSession(session.challengerId, session.guildId);
+    await commandSessionService.releaseExclusiveSession(
+      session.challengerId,
+      session.guildId,
+      session.exclusiveSessionToken || null
+    );
   }
 }
 

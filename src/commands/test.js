@@ -4,6 +4,7 @@ import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
 import inventoryService from '../services/inventoryService.js';
 import itemsService from '../services/itemsService.js';
+import jsonbService from '../services/jsonbService.js';
 import { formatMoney, parsePositiveAmount, toBigInt } from '../utils/moneyUtils.js';
 
 const RUNSERIES_SEPARATOR_REGEX = /\s*;;\s*/;
@@ -37,7 +38,7 @@ function tokenizeSeriesCommand(commandText) {
 class TestCommand extends BaseCommand {
   constructor(client) {
     // Only register the command if in development mode
-    if (process.env.IS_DEVEL !== 'true') {
+    if (process.env.IS_DEVEL !== 'true' || process.env.NODE_ENV === 'production') {
       return null;
     }
 
@@ -79,6 +80,12 @@ class TestCommand extends BaseCommand {
             name: 'resetgrowcooldown',
             value:
               '`test resetgrowcooldown [@user]` - Reset grow cooldown (`resetcooldown`/`resetgrow` also work)',
+            inline: true,
+          },
+          {
+            name: 'resetallcooldowns',
+            value:
+              '`test resetallcooldowns [@user]` - Reset all command cooldowns for this guild/user',
             inline: true,
           },
           {
@@ -233,6 +240,7 @@ class TestCommand extends BaseCommand {
           const targetUser = message.mentions.users.first() || message.author;
 
           await economy.updateLastGrow(targetUser.id, guildId, new Date(0));
+          await jsonbService.setKey(targetUser.id, guildId, 'growCooldownUntil', 0);
 
           const resetEmbed = new EmbedBuilder()
             .setColor(CONFIG.COLORS.SUCCESS)
@@ -241,6 +249,54 @@ class TestCommand extends BaseCommand {
             .addFields(
               { name: 'User', value: targetUser.username, inline: true },
               { name: 'Status', value: 'Cooldown has been reset', inline: true }
+            )
+            .setFooter({ text: 'Test command result' })
+            .setTimestamp();
+
+          await message.reply({ embeds: [resetEmbed] });
+          break;
+        }
+
+        case 'resetallcooldowns':
+        case 'resetallcd':
+        case 'resetcommandcooldowns': {
+          const targetUser = message.mentions.users.first() || message.author;
+          const commandHandler = this.client?.commandHandler;
+          if (!commandHandler || typeof commandHandler.clearCooldown !== 'function') {
+            return message.reply('Command handler is unavailable. Cannot clear command cooldowns.');
+          }
+
+          const uniqueCommands = [
+            ...new Map(
+              Array.from(commandHandler.commands.values()).map((loadedCommand) => [
+                loadedCommand.name,
+                loadedCommand,
+              ])
+            ).values(),
+          ];
+
+          await Promise.all(
+            uniqueCommands.map((loadedCommand) =>
+              commandHandler.clearCooldown(targetUser.id, guildId, loadedCommand)
+            )
+          );
+
+          const resetEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.SUCCESS)
+            .setTitle('⏰ All Command Cooldowns Reset')
+            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
+            .addFields(
+              { name: 'User', value: targetUser.username, inline: true },
+              {
+                name: 'Commands Cleared',
+                value: `${uniqueCommands.length}`,
+                inline: true,
+              },
+              {
+                name: 'Scope',
+                value: 'Redis + in-memory command cooldowns',
+                inline: true,
+              }
             )
             .setFooter({ text: 'Test command result' })
             .setTimestamp();
@@ -551,4 +607,6 @@ class TestCommand extends BaseCommand {
   }
 }
 
-export default process.env.IS_DEVEL === 'true' ? TestCommand : null;
+export default process.env.IS_DEVEL === 'true' && process.env.NODE_ENV !== 'production'
+  ? TestCommand
+  : null;

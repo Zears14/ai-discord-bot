@@ -26,7 +26,8 @@ function pickRandom(values) {
 
 function computePercentLoss(balance, percent) {
   if (balance <= 0n) return 0n;
-  return (balance * BigInt(percent)) / 100n;
+  const loss = (balance * BigInt(percent)) / 100n;
+  return loss > 0n ? loss : 1n;
 }
 
 function sleep(ms) {
@@ -132,11 +133,10 @@ class HuntCommand extends BaseCommand {
         return message.reply({ embeds: [cooldownEmbed] });
       }
 
-      const [bankData, levelData] = await Promise.all([
-        economy.getBankData(userId, guildId),
+      const [walletBalance, levelData] = await Promise.all([
+        economy.getBalance(userId, guildId),
         levelService.getLevelData(userId, guildId),
       ]);
-      const walletBalance = await economy.getBalance(userId, guildId);
 
       const siteText = pickRandom(cfg.ENCOUNTERS);
       const actionText = pickRandom(cfg.ACTIONS);
@@ -195,7 +195,7 @@ class HuntCommand extends BaseCommand {
       if (!brokeTool) {
         const scaled = computeScaledAdventureReward(
           baseReward,
-          bankData.totalBalance,
+          walletBalance,
           levelData.level,
           cfg.SCALING
         );

@@ -3,6 +3,7 @@
  * @module commands/work
  */
 
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
@@ -14,6 +15,8 @@ const workConfig = CONFIG.COMMANDS.WORK;
 const jobs = workConfig.JOBS;
 const defaultJob = jobs[0];
 const worksRequiredForJobChange = workConfig.WORKS_REQUIRED_FOR_JOB_CHANGE;
+const workOperationLockKey = `${workConfig.STATE_KEY}OperationLockUntil`;
+const workOperationLockMs = 8000;
 const jobLookup = new Map();
 
 for (const job of jobs) {
@@ -52,7 +55,7 @@ function formatAcceptance(chance) {
 function randomBigIntInRange(min, max) {
   if (max <= min) return min;
   const span = Number(max - min + 1n);
-  const roll = Math.floor(Math.random() * span);
+  const roll = randomInt(span);
   return min + BigInt(roll);
 }
 
@@ -112,6 +115,12 @@ class WorkCommand extends BaseCommand {
     const input = args.join(' ').trim();
 
     if (!input) {
+      const lock = await this.acquireOperationLock(userId, guildId);
+      if (!lock.acquired) {
+        return message.reply(
+          'Your previous work action is still processing. Try again in a moment.'
+        );
+      }
       return this.runShift(message, userId, guildId);
     }
 
@@ -127,7 +136,36 @@ class WorkCommand extends BaseCommand {
       );
     }
 
+    const lock = await this.acquireOperationLock(userId, guildId);
+    if (!lock.acquired) {
+      return message.reply('Your previous work action is still processing. Try again in a moment.');
+    }
+
     return this.applyForJob(message, userId, guildId, targetJob);
+  }
+
+  async acquireOperationLock(userId, guildId) {
+    const now = Date.now();
+    let lock = await jsonbService.acquireTimedKey(
+      userId,
+      guildId,
+      workOperationLockKey,
+      now + workOperationLockMs,
+      now
+    );
+
+    if (!lock.acquired && Number(lock.value ?? 0n) <= 0) {
+      await jsonbService.setKey(userId, guildId, workOperationLockKey, 0);
+      lock = await jsonbService.acquireTimedKey(
+        userId,
+        guildId,
+        workOperationLockKey,
+        now + workOperationLockMs,
+        now
+      );
+    }
+
+    return lock;
   }
 
   async showJobs(message, userId, guildId) {
@@ -190,7 +228,7 @@ class WorkCommand extends BaseCommand {
       await economy.updateBalance(userId, guildId, -targetJob.entryFee, 'work-job-entry-fee');
     }
 
-    const accepted = Math.random() < targetJob.acceptanceChance;
+    const accepted = randomInt(1_000_000) / 1_000_000 < targetJob.acceptanceChance;
     if (accepted) {
       await setWorkState(userId, guildId, {
         currentJob: targetJob.id,

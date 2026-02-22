@@ -98,11 +98,6 @@ async function hasItem(userId, guildId, itemId, quantity = 1) {
 async function useItem(userId, guildId, itemId, quantity = 1) {
   const parsedItemId = toBigInt(itemId, 'Item ID');
   const parsedQuantity = parsePositiveAmount(quantity, 'Quantity');
-  const userHasItem = await hasItem(userId, guildId, parsedItemId, parsedQuantity);
-  if (!userHasItem) {
-    return { success: false, message: "You don't have enough of this item." };
-  }
-
   const item = await itemsService.getItemById(parsedItemId);
   if (!item) {
     return { success: false, message: 'Item not found.' };
@@ -113,17 +108,61 @@ async function useItem(userId, guildId, itemId, quantity = 1) {
     return { success: false, message: `${item.name} cannot be used.` };
   }
 
-  // Log the item usage
-  await historyService.addHistory({
-    userid: userId,
-    guildid: guildId,
-    type: 'use-item',
-    itemid: parsedItemId,
-    amount: parsedQuantity,
-  });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const inventoryRow = await client.query(
+      `SELECT quantity
+         FROM inventory
+         WHERE userid = $1 AND guildid = $2 AND itemid = $3
+         FOR UPDATE`,
+      [userId, guildId, parsedItemId]
+    );
+    const availableQuantity = inventoryRow.rowCount > 0 ? inventoryRow.rows[0].quantity : 0n;
+    if (availableQuantity < parsedQuantity) {
+      await client.query('ROLLBACK');
+      return { success: false, message: "You don't have enough of this item." };
+    }
 
-  if (item.type === 'consumable') {
-    await removeItemFromInventory(userId, guildId, parsedItemId, parsedQuantity);
+    if (item.type === 'consumable') {
+      const consumed = await client.query(
+        `UPDATE inventory
+           SET quantity = quantity - $4
+           WHERE userid = $1 AND guildid = $2 AND itemid = $3 AND quantity >= $4
+           RETURNING quantity`,
+        [userId, guildId, parsedItemId, parsedQuantity]
+      );
+      if (consumed.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, message: "You don't have enough of this item." };
+      }
+
+      if (consumed.rows[0].quantity === 0n) {
+        await client.query(
+          'DELETE FROM inventory WHERE userid = $1 AND guildid = $2 AND itemid = $3',
+          [userId, guildId, parsedItemId]
+        );
+      }
+    }
+
+    // Log usage in the same transaction as inventory mutation.
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'use-item',
+        itemid: parsedItemId,
+        amount: parsedQuantity,
+      },
+      client
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
 
   return itemDefinition.use(userId, guildId, parsedQuantity);

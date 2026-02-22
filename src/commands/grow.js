@@ -1,15 +1,21 @@
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import economy from '../services/economy.js';
+import jsonbService from '../services/jsonbService.js';
 import { formatMoney, toNumberClamped } from '../utils/moneyUtils.js';
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+function secureRandomInt(min, max) {
+  return randomInt(min, max + 1);
+}
+
+function randomUnit() {
+  return randomInt(1_000_000) / 1_000_000;
 }
 
 function calculateGrowth(currentBalance) {
@@ -22,7 +28,7 @@ function calculateGrowth(currentBalance) {
   // This keeps growth numerically larger at high balance while relatively less meaningful.
   const growthRate = growCfg.MIN_RATE + (growCfg.MAX_RATE - growCfg.MIN_RATE) * diminishingFactor;
   const scaledGrowth = Math.floor(balance * growthRate);
-  const growthCenter = Math.max(randomInt(growCfg.BASE_MIN, growCfg.BASE_MAX), scaledGrowth);
+  const growthCenter = Math.max(secureRandomInt(growCfg.BASE_MIN, growCfg.BASE_MAX), scaledGrowth);
   const positiveMin = Math.max(1, Math.floor(growthCenter * growCfg.RANGE_LOW_MULTIPLIER));
   const positiveMax = Math.max(
     positiveMin,
@@ -38,7 +44,7 @@ function calculateGrowth(currentBalance) {
     );
   }
 
-  if (Math.random() < negativeChance) {
+  if (randomUnit() < negativeChance) {
     const riskFactor = 1 - diminishingFactor;
     const negativeRate =
       growCfg.NEGATIVE_RATE_MIN +
@@ -56,17 +62,17 @@ function calculateGrowth(currentBalance) {
     // Keep shrinkage valid under min-balance constraints.
     const boundedNegativeMax = Math.min(balance, negativeMax);
     const boundedNegativeMin = Math.min(negativeMin, boundedNegativeMax);
-    return -randomInt(boundedNegativeMin, boundedNegativeMax);
+    return -secureRandomInt(boundedNegativeMin, boundedNegativeMax);
   }
 
-  let growth = randomInt(positiveMin, positiveMax);
+  let growth = secureRandomInt(positiveMin, positiveMax);
   const jackpotChance = growCfg.JACKPOT_BASE_CHANCE * diminishingFactor;
-  if (Math.random() < jackpotChance) {
+  if (randomUnit() < jackpotChance) {
     const bonusMax = Math.max(
       growCfg.JACKPOT_BONUS_MIN,
       Math.floor(growthCenter * growCfg.JACKPOT_BONUS_SCALE * diminishingFactor)
     );
-    growth += randomInt(1, bonusMax);
+    growth += secureRandomInt(1, bonusMax);
   }
 
   return growth;
@@ -87,15 +93,38 @@ class GrowCommand extends BaseCommand {
   async execute(message, _args) {
     const userId = message.author.id;
     const guildId = message.guild.id;
-    const growStatus = await economy.canGrow(userId, guildId);
+    const cooldownHours = CONFIG.ECONOMY.GROW_INTERVAL;
+    const now = Date.now();
+    const growCooldownMs = cooldownHours * 60 * 60 * 1000;
+    const growCooldownKey = 'growCooldownUntil';
+    let cooldownLock = await jsonbService.acquireTimedKey(
+      userId,
+      guildId,
+      growCooldownKey,
+      now + growCooldownMs,
+      now
+    );
+
+    if (!cooldownLock.acquired && Number(cooldownLock.value ?? 0n) <= 0) {
+      await jsonbService.setKey(userId, guildId, growCooldownKey, 0);
+      cooldownLock = await jsonbService.acquireTimedKey(
+        userId,
+        guildId,
+        growCooldownKey,
+        now + growCooldownMs,
+        now
+      );
+    }
 
     // Check cooldown
-    if (!growStatus.canGrow) {
+    if (!cooldownLock.acquired && Number(cooldownLock.value ?? 0n) > now) {
+      const remainingMs = Number(cooldownLock.value) - now;
+      const hoursUntilNext = remainingMs / (1000 * 60 * 60);
       const cooldownEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.ERROR)
         .setTitle('⏰ Cooldown Active')
         .setDescription(
-          `You need to wait ${growStatus.hoursUntilNext.toFixed(1)} more hours before growing again!`
+          `You need to wait ${hoursUntilNext.toFixed(1)} more hours before growing again!`
         )
         .setFooter({ text: 'Try again later' })
         .setTimestamp();
@@ -128,7 +157,7 @@ class GrowCommand extends BaseCommand {
         },
         { name: 'New Length', value: `${formatMoney(newBalance)} cm`, inline: true }
       )
-      .setFooter({ text: `Next growth available in ${CONFIG.ECONOMY.GROW_INTERVAL} hours` })
+      .setFooter({ text: `Next growth available in ${cooldownHours} hours` })
       .setTimestamp();
 
     if (isUltraGrowth) {

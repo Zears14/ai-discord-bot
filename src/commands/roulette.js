@@ -3,6 +3,7 @@
  * @module commands/roulette
  */
 
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
@@ -81,7 +82,7 @@ class RouletteCommand extends BaseCommand {
       const spinMsg = await message.reply({ embeds: [spinEmbed] });
 
       // Determine result early but don't show it
-      const winningNumber = ROULETTE_NUMBERS[Math.floor(Math.random() * ROULETTE_NUMBERS.length)];
+      const winningNumber = ROULETTE_NUMBERS[randomInt(ROULETTE_NUMBERS.length)];
       const winningColor = RED_NUMBERS.includes(winningNumber)
         ? 'red'
         : BLACK_NUMBERS.includes(winningNumber)

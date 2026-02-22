@@ -8,7 +8,11 @@ import { Colors } from 'discord.js';
 export default {
   PROTECTION_KEY: 'robProtectionUntil',
   PROTECTION_MS: 60 * 60 * 1000, // 1 hour
+  ATTEMPT_LOCK_KEY: 'robAttemptLockUntil',
+  ATTEMPT_LOCK_MS: 10 * 1000, // 10s transient per-target processing lock
   MIN_BALANCE_TO_ROB: 1,
+  MIN_BALANCE_RATIO_BPS: 1000, // robber must hold at least 10% of victim wallet
+  MAX_STEAL_OF_ROBBER_BALANCE_BPS: 30000, // cap steal payout at 3x robber wallet
 
   CHANCE: {
     BASE: 0.55, // 55% at equal balances

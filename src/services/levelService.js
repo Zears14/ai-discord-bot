@@ -3,6 +3,7 @@
  * @module services/levelService
  */
 
+import { randomInt } from 'node:crypto';
 import jsonbService from './jsonbService.js';
 import logger from './loggerService.js';
 import CONFIG from '../config/config.js';
@@ -112,8 +113,7 @@ async function awardCommandXp(userId, guildId, commandName = 'unknown') {
   }
 
   const before = await getLevelData(userId, guildId);
-  const xpGainRange = levelCfg.XP_PER_COMMAND_MAX - levelCfg.XP_PER_COMMAND_MIN + 1;
-  const xpGain = BigInt(Math.floor(Math.random() * xpGainRange) + levelCfg.XP_PER_COMMAND_MIN);
+  const xpGain = BigInt(randomInt(levelCfg.XP_PER_COMMAND_MIN, levelCfg.XP_PER_COMMAND_MAX + 1));
   const after = calculateProgression(before.totalXp + xpGain);
 
   await jsonbService.setKey(userId, guildId, levelCfg.STATE_KEY, {

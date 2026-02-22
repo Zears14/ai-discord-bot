@@ -59,6 +59,8 @@ export default {
     INSTRUCTIONS: '🎮',
     HIT: '🎯',
     STAND: '✋',
+    DOUBLE: '💳',
+    SPLIT: '🪓',
     SURRENDER: '🏳️',
     WIN: '🎉',
     LOSE: '💔',

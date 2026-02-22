@@ -3,8 +3,14 @@
  * @module commands/crime
  */
 
-import { randomInt } from 'node:crypto';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import { randomBytes, randomInt } from 'node:crypto';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  MessageFlags,
+} from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import commandSessionService from '../services/commandSessionService.js';
@@ -26,7 +32,8 @@ function randomUnit() {
 
 function computePercentLoss(balance, percent) {
   if (balance <= 0n) return 0n;
-  return (balance * BigInt(percent)) / 100n;
+  const loss = (balance * BigInt(percent)) / 100n;
+  return loss > 0n ? loss : 1n;
 }
 
 function toPercentText(chanceBps) {
@@ -82,6 +89,39 @@ function sampleCrimes(crimes, count) {
   return pool.slice(0, Math.min(Math.max(1, count), pool.length));
 }
 
+function randomBigIntInRange(min, max) {
+  const lower = min <= max ? min : max;
+  const upper = min <= max ? max : min;
+  if (lower === upper) {
+    return lower;
+  }
+
+  const lowerAsNumber = Number(lower);
+  const upperAsNumber = Number(upper);
+  if (
+    Number.isSafeInteger(lowerAsNumber) &&
+    Number.isSafeInteger(upperAsNumber) &&
+    BigInt(lowerAsNumber) === lower &&
+    BigInt(upperAsNumber) === upper
+  ) {
+    return BigInt(randomInt(lowerAsNumber, upperAsNumber + 1));
+  }
+
+  const span = upper - lower + 1n;
+  const bits = span.toString(2).length;
+  const byteLength = Math.max(1, Math.ceil(bits / 8));
+  const upperBound = 1n << BigInt(byteLength * 8);
+  const rejectionThreshold = upperBound - (upperBound % span);
+
+  while (true) {
+    const randomHex = randomBytes(byteLength).toString('hex');
+    const sampled = BigInt(`0x${randomHex}`);
+    if (sampled < rejectionThreshold) {
+      return lower + (sampled % span);
+    }
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -94,13 +134,42 @@ function formatRemaining(ms) {
   return `${secs}s`;
 }
 
-function buildChoiceEmbed(choices) {
-  const lines = choices.map(
-    (crime, index) =>
+function computeScaledRange(crime, totalBalance, level, scalingConfig) {
+  const rawMin = Math.floor(Number(crime.rewardMin ?? 0));
+  const rawMax = Math.floor(Number(crime.rewardMax ?? 0));
+  const normalizedMin = Number.isFinite(rawMin) ? Math.max(1, rawMin) : 1;
+  const normalizedMax = Number.isFinite(rawMax) ? Math.max(normalizedMin, rawMax) : normalizedMin;
+  const scaledMin = computeScaledAdventureReward(
+    BigInt(normalizedMin),
+    totalBalance,
+    level,
+    scalingConfig
+  ).reward;
+  const scaledMax = computeScaledAdventureReward(
+    BigInt(normalizedMax),
+    totalBalance,
+    level,
+    scalingConfig
+  ).reward;
+
+  return {
+    min: scaledMin,
+    max: scaledMax >= scaledMin ? scaledMax : scaledMin,
+  };
+}
+
+function buildChoiceEmbed(choices, scaledRangesByCrimeId = new Map()) {
+  const lines = choices.map((crime, index) => {
+    const scaledRange = scaledRangesByCrimeId.get(crime.id);
+    const minReward = scaledRange?.min ?? BigInt(crime.rewardMin);
+    const maxReward = scaledRange?.max ?? BigInt(crime.rewardMax);
+
+    return (
       `**${index + 1}. ${crime.emoji} ${crime.label}**\n` +
-      `Reward: ${formatMoney(BigInt(crime.rewardMin))}-${formatMoney(BigInt(crime.rewardMax))} cm\n` +
+      `Reward: ${formatMoney(minReward)}-${formatMoney(maxReward)} cm\n` +
       `Caught: ${toPercentText(crime.failChanceBps)} | Death: ${toPercentText(crime.deathChanceBps)}`
-  );
+    );
+  });
 
   return new EmbedBuilder()
     .setColor(CONFIG.COLORS.DEFAULT)
@@ -122,6 +191,59 @@ function buildButtons(choices, disabled = false) {
         .setDisabled(disabled)
     )
   );
+}
+
+function buildCrimeTimeoutEmbed() {
+  return new EmbedBuilder()
+    .setColor(CONFIG.COLORS.DEFAULT)
+    .setTitle('⌛ Crime Cancelled')
+    .setDescription('You took too long to choose. The opportunity is gone.')
+    .setTimestamp();
+}
+
+function scheduleCrimeTimeout(gameMessage, timeoutMs) {
+  const messageId = gameMessage.id;
+  const timeoutHandle = setTimeout(async () => {
+    try {
+      const lockAcquired = await deployLockService.acquireLock(`crime:timeout:${messageId}`, 15);
+      if (!lockAcquired) {
+        return;
+      }
+
+      const session = await commandSessionService.getSession('crime', messageId);
+      if (!session) {
+        return;
+      }
+
+      const expiresAt = Number(session.expiresAt || 0);
+      if (Boolean(session.resolved) || expiresAt > Date.now()) {
+        return;
+      }
+
+      const cfg = CONFIG.COMMANDS.CRIME;
+      const crimeLookup = new Map(cfg.CRIMES.map((crime) => [crime.id, crime]));
+      const sessionCrimes = (session.crimeIds || [])
+        .map((id) => crimeLookup.get(id))
+        .filter(Boolean);
+      const disabledButtons = sessionCrimes.length > 0 ? buildButtons(sessionCrimes, true) : null;
+
+      await commandSessionService.deleteSession('crime', messageId);
+      await commandSessionService.releaseExclusiveSession(
+        session.userId,
+        session.guildId,
+        session.exclusiveSessionToken || null
+      );
+
+      await gameMessage.edit({
+        embeds: [buildCrimeTimeoutEmbed()],
+        components: disabledButtons ? [disabledButtons] : [],
+      });
+    } catch {
+      // Best-effort timeout cleanup.
+    }
+  }, timeoutMs + 250);
+
+  timeoutHandle.unref?.();
 }
 
 async function playCrimeAnimation(
@@ -179,7 +301,10 @@ class CrimeCommand extends BaseCommand {
 
     try {
       await economy.getUserData(userId, guildId);
-      const currentWallet = await economy.getBalance(userId, guildId);
+      const [currentWallet, levelData] = await Promise.all([
+        economy.getBalance(userId, guildId),
+        levelService.getLevelData(userId, guildId),
+      ]);
       if (currentWallet <= 0n) {
         return message.reply('You need money in your wallet to commit a crime.');
       }
@@ -220,9 +345,15 @@ class CrimeCommand extends BaseCommand {
 
       const choiceCount = Math.min(Math.max(1, cfg.CHOICES_PER_RUN ?? 3), 3);
       const selectedCrimes = sampleCrimes(cfg.CRIMES, choiceCount);
+      const scaledRangesByCrimeId = new Map(
+        selectedCrimes.map((crime) => [
+          crime.id,
+          computeScaledRange(crime, currentWallet, levelData.level, cfg.SCALING),
+        ])
+      );
 
       const gameMessage = await message.reply({
-        embeds: [buildChoiceEmbed(selectedCrimes)],
+        embeds: [buildChoiceEmbed(selectedCrimes, scaledRangesByCrimeId)],
         components: [buildButtons(selectedCrimes, false)],
       });
 
@@ -234,6 +365,7 @@ class CrimeCommand extends BaseCommand {
         {
           userId,
           guildId,
+          exclusiveSessionToken: message.__exclusiveSessionToken || null,
           crimeIds: selectedCrimes.map((crime) => crime.id),
           expiresAt,
           resolved: false,
@@ -242,7 +374,11 @@ class CrimeCommand extends BaseCommand {
       );
 
       if (!stored) {
-        await commandSessionService.releaseExclusiveSession(userId, guildId);
+        await commandSessionService.releaseExclusiveSession(
+          userId,
+          guildId,
+          message.__exclusiveSessionToken || null
+        );
         await gameMessage
           .edit({
             embeds: [
@@ -258,10 +394,15 @@ class CrimeCommand extends BaseCommand {
         return { skipCooldown: true };
       }
 
+      scheduleCrimeTimeout(gameMessage, timeoutMs);
       return { keepExclusiveSession: true };
     } catch (error) {
       logger.discord.cmdError('Crime command error:', { userId, guildId, error });
-      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await commandSessionService.releaseExclusiveSession(
+        userId,
+        guildId,
+        message.__exclusiveSessionToken || null
+      );
       return message.reply('Crime failed due to an error. Please try again later.');
     }
   }
@@ -276,7 +417,8 @@ class CrimeCommand extends BaseCommand {
     }
 
     const messageId = interaction.message.id;
-    const lockAcquired = await deployLockService.acquireLock(`crime:session:${messageId}`, 5);
+    const lockKey = interaction.id || `crime:fallback:${messageId}:${interaction.user.id}`;
+    const lockAcquired = await deployLockService.acquireLock(`crime:interaction:${lockKey}`, 15);
     if (!lockAcquired) {
       await interaction.deferUpdate().catch(() => {});
       return;
@@ -284,12 +426,30 @@ class CrimeCommand extends BaseCommand {
 
     const session = await commandSessionService.getSession('crime', messageId);
     if (!session) {
+      const expiredEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('⌛ Crime Session Expired')
+        .setDescription('This crime session has expired. Run `crime` again.')
+        .setTimestamp();
+
       await interaction
-        .reply({
-          content: 'That crime session has expired. Run `crime` again.',
-          ephemeral: true,
+        .update({
+          embeds: [expiredEmbed],
+          components: [],
         })
-        .catch(() => {});
+        .catch(async () => {
+          await interaction.message
+            .edit({ embeds: [expiredEmbed], components: [] })
+            .catch(() => {});
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction
+              .reply({
+                content: 'That crime session has expired. Run `crime` again.',
+                flags: MessageFlags.Ephemeral,
+              })
+              .catch(() => {});
+          }
+        });
       return;
     }
 
@@ -299,7 +459,7 @@ class CrimeCommand extends BaseCommand {
       await interaction
         .reply({
           content: 'These crime buttons are not for you.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
       return;
@@ -310,26 +470,26 @@ class CrimeCommand extends BaseCommand {
     const now = Date.now();
     const crimeLookup = new Map(cfg.CRIMES.map((crime) => [crime.id, crime]));
     const sessionCrimes = (session.crimeIds || []).map((id) => crimeLookup.get(id)).filter(Boolean);
-    const disabledButtons = buildButtons(sessionCrimes, true);
+    const disabledButtons = sessionCrimes.length > 0 ? buildButtons(sessionCrimes, true) : null;
 
     if (Boolean(session.resolved) || expiresAt <= now) {
       await commandSessionService.deleteSession('crime', messageId);
-      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await commandSessionService.releaseExclusiveSession(
+        userId,
+        guildId,
+        session.exclusiveSessionToken || null
+      );
 
-      const timeoutEmbed = new EmbedBuilder()
-        .setColor(CONFIG.COLORS.DEFAULT)
-        .setTitle('⌛ Crime Cancelled')
-        .setDescription('You took too long to choose. The opportunity is gone.')
-        .setTimestamp();
+      const timeoutEmbed = buildCrimeTimeoutEmbed();
 
       await interaction
         .update({
           embeds: [timeoutEmbed],
-          components: [disabledButtons],
+          components: disabledButtons ? [disabledButtons] : [],
         })
         .catch(async () => {
           await interaction.message
-            .edit({ embeds: [timeoutEmbed], components: [disabledButtons] })
+            .edit({ embeds: [timeoutEmbed], components: disabledButtons ? [disabledButtons] : [] })
             .catch(() => {});
         });
       return;
@@ -339,7 +499,7 @@ class CrimeCommand extends BaseCommand {
       await interaction
         .reply({
           content: 'That crime option is no longer valid. Run `crime` again.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
       return;
@@ -350,7 +510,7 @@ class CrimeCommand extends BaseCommand {
       await interaction
         .reply({
           content: 'That crime option is unavailable right now. Run `crime` again.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         })
         .catch(() => {});
       return;
@@ -359,9 +519,8 @@ class CrimeCommand extends BaseCommand {
     await interaction.deferUpdate().catch(() => {});
 
     try {
-      const [walletBalance, bankData, levelData] = await Promise.all([
+      const [walletBalance, levelData] = await Promise.all([
         economy.getBalance(userId, guildId),
-        economy.getBankData(userId, guildId),
         levelService.getLevelData(userId, guildId),
       ]);
 
@@ -478,14 +637,8 @@ class CrimeCommand extends BaseCommand {
           [disabledButtons]
         );
       } else {
-        const baseReward = BigInt(randomInt(crime.rewardMin, crime.rewardMax + 1));
-        const scaled = computeScaledAdventureReward(
-          baseReward,
-          bankData.totalBalance,
-          levelData.level,
-          cfg.SCALING
-        );
-        const finalReward = scaled.reward;
+        const scaledRange = computeScaledRange(crime, walletBalance, levelData.level, cfg.SCALING);
+        const finalReward = randomBigIntInRange(scaledRange.min, scaledRange.max);
 
         let newWallet = walletBalance;
         if (finalReward > 0n) {
@@ -520,7 +673,11 @@ class CrimeCommand extends BaseCommand {
       }
 
       await commandSessionService.deleteSession('crime', messageId);
-      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await commandSessionService.releaseExclusiveSession(
+        userId,
+        guildId,
+        session.exclusiveSessionToken || null
+      );
     } catch (error) {
       logger.discord.cmdError('Crime collect handler error:', {
         userId,
@@ -536,7 +693,11 @@ class CrimeCommand extends BaseCommand {
 
       await interaction.message.edit({ embeds: [errorEmbed], components: [] }).catch(() => {});
       await commandSessionService.deleteSession('crime', messageId);
-      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await commandSessionService.releaseExclusiveSession(
+        userId,
+        guildId,
+        session.exclusiveSessionToken || null
+      );
     }
   }
 }

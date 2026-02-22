@@ -282,7 +282,7 @@ client.on('messageCreate', async (message) => {
   if (isShuttingDown) return;
   if (message.author.bot || message.system) return;
 
-  const lockAcquired = await deployLockService.acquireLock(`message:${message.id}`, 10);
+  const lockAcquired = await deployLockService.acquireLock(`message:${message.id}`, 60);
   if (!lockAcquired) {
     return;
   }
@@ -312,7 +312,7 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  const lockAcquired = await deployLockService.acquireLock(`interaction:${interaction.id}`, 10);
+  const lockAcquired = await deployLockService.acquireLock(`interaction:${interaction.id}`, 60);
   if (!lockAcquired) {
     return;
   }

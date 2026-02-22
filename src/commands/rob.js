@@ -3,6 +3,7 @@
  * @module commands/rob
  */
 
+import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
@@ -23,7 +24,7 @@ function clamp(value, min, max) {
 
 function weightedPick(tiers) {
   const totalWeight = tiers.reduce((sum, tier) => sum + tier.weight, 0);
-  let roll = Math.random() * totalWeight;
+  let roll = (randomInt(1_000_000) / 1_000_000) * totalWeight;
 
   for (const tier of tiers) {
     roll -= tier.weight;
@@ -36,7 +37,7 @@ function weightedPick(tiers) {
 function pickWeightedPercent(tiers) {
   const tier = weightedPick(tiers);
   if (tier.min === tier.max) return tier.min;
-  return tier.min + Math.random() * (tier.max - tier.min);
+  return tier.min + (randomInt(1_000_000) / 1_000_000) * (tier.max - tier.min);
 }
 
 function formatPercent(value) {
@@ -52,6 +53,14 @@ function formatRemainingTime(ms) {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+function toTimestampBigInt(rawValue) {
+  try {
+    return toBigInt(rawValue ?? 0, 'Timestamp');
+  } catch {
+    return 0n;
+  }
 }
 
 async function notifyVictim(victim, robberName, guildName, amountDelta) {
@@ -123,22 +132,49 @@ class RobCommand extends BaseCommand {
         return message.reply(`${victim.username} has no wallet Dih to steal.`);
       }
 
+      const minimumStakeByRatio =
+        (victimBalance * BigInt(CONFIG.COMMANDS.ROB.MIN_BALANCE_RATIO_BPS ?? 0)) / 10000n;
+      const requiredStake =
+        minimumStakeByRatio > minBalanceToRob ? minimumStakeByRatio : minBalanceToRob;
+      if (robberBalance < requiredStake) {
+        return message.reply(
+          `You need at least ${formatMoney(requiredStake)} cm Dih in your wallet to rob ${victim.username}.`
+        );
+      }
+
       const now = BigInt(Date.now());
-      const protectionUntilTimestamp = now + BigInt(CONFIG.COMMANDS.ROB.PROTECTION_MS);
-      const protectionLock = await jsonbService.acquireTimedKey(
-        victim.id,
-        guildId,
-        CONFIG.COMMANDS.ROB.PROTECTION_KEY,
-        protectionUntilTimestamp,
-        now
+      const protectionUntil = toTimestampBigInt(
+        await jsonbService.getKey(victim.id, guildId, CONFIG.COMMANDS.ROB.PROTECTION_KEY)
       );
-      if (!protectionLock.acquired && protectionLock.value > now) {
-        const remaining = Number(protectionLock.value - now);
+      if (protectionUntil > now) {
+        const remaining = Number(protectionUntil - now);
         const embed = new EmbedBuilder()
           .setColor(CONFIG.COMMANDS.ROB.COLORS.INFO)
           .setTitle('🛡️ Target Protected')
           .setDescription(
             `${victim.username} was recently robbed and is protected for ${formatRemainingTime(remaining)}.`
+          )
+          .setTimestamp();
+
+        return message.reply({ embeds: [embed] });
+      }
+
+      const attemptLockUntilTimestamp = now + BigInt(CONFIG.COMMANDS.ROB.ATTEMPT_LOCK_MS ?? 10000);
+      const attemptLock = await jsonbService.acquireTimedKey(
+        victim.id,
+        guildId,
+        CONFIG.COMMANDS.ROB.ATTEMPT_LOCK_KEY,
+        attemptLockUntilTimestamp,
+        now
+      );
+      const attemptLockValue = toTimestampBigInt(attemptLock.value);
+      if (!attemptLock.acquired && attemptLockValue > now) {
+        const remaining = Number(attemptLockValue - now);
+        const embed = new EmbedBuilder()
+          .setColor(CONFIG.COMMANDS.ROB.COLORS.INFO)
+          .setTitle('⏳ Target Already Being Robbed')
+          .setDescription(
+            `${victim.username} is currently involved in another robbery attempt. Try again in ${formatRemainingTime(remaining)}.`
           )
           .setTimestamp();
 
@@ -157,17 +193,23 @@ class RobCommand extends BaseCommand {
         CONFIG.COMMANDS.ROB.CHANCE.BASE
       );
 
-      const success = Math.random() < successChance;
+      const success = randomInt(1_000_000) / 1_000_000 < successChance;
 
       if (success) {
         const stealPercent = pickWeightedPercent(CONFIG.COMMANDS.ROB.STEAL_PERCENT_TIERS);
         const computedStolen = floorPercentOf(victimBalance, stealPercent);
-        const stolenAmount =
+        let stolenAmount =
           computedStolen < 1n
             ? 1n
             : computedStolen > victimBalance
               ? victimBalance
               : computedStolen;
+        const stealCapByRobberBalance =
+          (robberBalance * BigInt(CONFIG.COMMANDS.ROB.MAX_STEAL_OF_ROBBER_BALANCE_BPS ?? 30000)) /
+          10000n;
+        if (stealCapByRobberBalance > 0n && stolenAmount > stealCapByRobberBalance) {
+          stolenAmount = stealCapByRobberBalance;
+        }
 
         const transfer = await economy.transferBalance(
           victim.id,
@@ -175,6 +217,14 @@ class RobCommand extends BaseCommand {
           guildId,
           stolenAmount,
           'rob-success'
+        );
+
+        const protectionUntilTimestamp = Date.now() + CONFIG.COMMANDS.ROB.PROTECTION_MS;
+        await jsonbService.setKey(
+          victim.id,
+          guildId,
+          CONFIG.COMMANDS.ROB.PROTECTION_KEY,
+          protectionUntilTimestamp
         );
 
         await notifyVictim(
