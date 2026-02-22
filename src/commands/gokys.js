@@ -59,7 +59,7 @@ class GoKysCommand extends BaseCommand {
   constructor(client) {
     super(client, {
       name: 'gokys',
-      description: 'High-risk callout with an almost impossible success chance',
+      description: 'Say go kys to someone',
       category: 'Economy',
       usage: 'gokys <@user>',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
