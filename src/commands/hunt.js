@@ -91,6 +91,11 @@ class HuntCommand extends BaseCommand {
         return message.reply('You need a **Hunting Rifle** to hunt. Buy one from `shop`.');
       }
 
+      const currentWallet = await economy.getBalance(userId, guildId);
+      if (currentWallet <= 0n) {
+        return message.reply('You need money in your wallet to hunt.');
+      }
+
       // Separate action cooldown (independent from command cooldown)
       await economy.getUserData(userId, guildId);
       const now = Date.now();
@@ -127,11 +132,11 @@ class HuntCommand extends BaseCommand {
         return message.reply({ embeds: [cooldownEmbed] });
       }
 
-      const [walletBalance, bankData, levelData] = await Promise.all([
-        economy.getBalance(userId, guildId),
+      const [bankData, levelData] = await Promise.all([
         economy.getBankData(userId, guildId),
         levelService.getLevelData(userId, guildId),
       ]);
+      const walletBalance = await economy.getBalance(userId, guildId);
 
       const siteText = pickRandom(cfg.ENCOUNTERS);
       const actionText = pickRandom(cfg.ACTIONS);
