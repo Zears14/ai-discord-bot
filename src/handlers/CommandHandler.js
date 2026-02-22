@@ -11,6 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import CONFIG from '../config/config.js';
 import economyService from '../services/economy.js';
+import jsonbService from '../services/jsonbService.js';
 import levelService from '../services/levelService.js';
 import logger from '../services/loggerService.js';
 import ErrorHandler from '../utils/errorHandler.js';
@@ -234,6 +235,63 @@ class CommandHandler {
     return patterns.some((pattern) => pattern.test(text));
   }
 
+  parseJailUntilTimestamp(rawValue) {
+    if (rawValue === null || rawValue === undefined) {
+      return 0;
+    }
+
+    if (typeof rawValue === 'number') {
+      if (!Number.isFinite(rawValue)) return 0;
+      return Math.max(0, Math.floor(rawValue));
+    }
+
+    if (typeof rawValue === 'bigint') {
+      const asNumber = Number(rawValue);
+      if (!Number.isFinite(asNumber)) return 0;
+      return Math.max(0, Math.floor(asNumber));
+    }
+
+    if (typeof rawValue === 'string') {
+      const parsed = Number(rawValue.trim());
+      if (!Number.isFinite(parsed)) return 0;
+      return Math.max(0, Math.floor(parsed));
+    }
+
+    return 0;
+  }
+
+  async getActiveJailUntil(userId, guildId) {
+    const jailKey = CONFIG.COMMANDS.CRIME?.JAIL_UNTIL_KEY || 'jailUntil';
+    try {
+      const rawJailUntil = await jsonbService.getKey(userId, guildId, jailKey);
+      const jailUntil = this.parseJailUntilTimestamp(rawJailUntil);
+      const now = Date.now();
+
+      if (jailUntil > now) {
+        return jailUntil;
+      }
+
+      if (jailUntil > 0) {
+        // Cleanup expired jail timer opportunistically.
+        jsonbService.setKey(userId, guildId, jailKey, 0).catch((error) => {
+          logger.discord.cmdError('Failed to clear expired jail timer:', {
+            userId,
+            guildId,
+            error,
+          });
+        });
+      }
+    } catch (error) {
+      logger.discord.cmdError('Failed to check jail status:', {
+        userId,
+        guildId,
+        error,
+      });
+    }
+
+    return 0;
+  }
+
   async notifyLoanReminders(message) {
     if (!message?.guild || !message?.author) {
       return;
@@ -310,6 +368,12 @@ class CommandHandler {
     const content = message.content.slice(prefix.length).trim();
     const args = content.split(/\s+/);
     const commandName = args.shift().toLowerCase();
+    const jailUntil = await this.getActiveJailUntil(message.author.id, message.guild.id);
+    if (jailUntil > Date.now()) {
+      return message.reply(
+        `🚔 You are in jail. You can use commands again <t:${Math.floor(jailUntil / 1000)}:R>.`
+      );
+    }
 
     // Use Map's get-or-set pattern for better performance
     const command =

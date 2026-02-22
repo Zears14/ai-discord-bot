@@ -18,6 +18,10 @@ function rollChanceBps(chanceBps) {
   return randomInt(1, 10001) <= chanceBps;
 }
 
+function randomUnit() {
+  return randomInt(1_000_000) / 1_000_000;
+}
+
 function computePercentLoss(balance, percent) {
   if (balance <= 0n) return 0n;
   return (balance * BigInt(percent)) / 100n;
@@ -25,6 +29,46 @@ function computePercentLoss(balance, percent) {
 
 function toPercentText(chanceBps) {
   return `${(chanceBps / 100).toFixed(2)}%`;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function computeCrimeSeverity(crime) {
+  const minReward = 25;
+  const maxReward = 1600;
+  const rewardSpan = maxReward - minReward;
+  const rewardComponent = clampNumber(
+    rewardSpan > 0 ? (Number(crime.rewardMax ?? minReward) - minReward) / rewardSpan : 0,
+    0,
+    1
+  );
+  const riskRaw =
+    clampNumber(Number(crime.failChanceBps ?? 0), 0, 10000) +
+    clampNumber(Number(crime.deathChanceBps ?? 0), 0, 10000);
+  const riskComponent = clampNumber(riskRaw / 12000, 0, 1);
+  return clampNumber(rewardComponent * 0.45 + riskComponent * 0.55, 0, 1);
+}
+
+function computeJailChanceBps(crime, cfg) {
+  const severity = computeCrimeSeverity(crime);
+  const minChance = Math.max(0, Math.floor(Number(cfg.JAIL_CHANCE_MIN_BPS ?? 300)));
+  const maxChance = Math.max(minChance, Math.floor(Number(cfg.JAIL_CHANCE_MAX_BPS ?? 1800)));
+  return minChance + Math.floor((maxChance - minChance) * severity);
+}
+
+function chooseJailDurationMinutes(crime, cfg) {
+  const severity = computeCrimeSeverity(crime);
+  const minMinutes = Math.max(1, Math.floor(Number(cfg.JAIL_MIN_MINUTES ?? 5)));
+  const maxMinutes = Math.max(minMinutes, Math.floor(Number(cfg.JAIL_MAX_MINUTES ?? 15)));
+  const weightMin = Math.max(1.01, Number(cfg.JAIL_WEIGHT_MIN ?? 1.1));
+  const weightMax = Math.max(weightMin, Number(cfg.JAIL_WEIGHT_MAX ?? 3.8));
+  const weight = weightMin + (weightMax - weightMin) * severity;
+  const weightedRoll = Math.pow(randomUnit(), 1 / weight);
+  const rangeSize = maxMinutes - minMinutes + 1;
+  const picked = minMinutes + Math.floor(weightedRoll * rangeSize);
+  return clampNumber(picked, minMinutes, maxMinutes);
 }
 
 function sampleCrimes(crimes, count) {
@@ -131,6 +175,10 @@ class CrimeCommand extends BaseCommand {
 
     try {
       await economy.getUserData(userId, guildId);
+      const currentWallet = await economy.getBalance(userId, guildId);
+      if (currentWallet <= 0n) {
+        return message.reply('You need money in your wallet to commit a crime.');
+      }
 
       const now = Date.now();
       const actionCooldownMs = (cfg.ACTION_COOLDOWN_SECONDS ?? 420) * 1000;
@@ -277,6 +325,26 @@ class CrimeCommand extends BaseCommand {
               newWallet = result.balance;
             }
 
+            let jailMinutes = 0;
+            let jailUntilMs = 0;
+            const jailChanceBps = computeJailChanceBps(crime, cfg);
+            if (rollChanceBps(jailChanceBps)) {
+              jailMinutes = chooseJailDurationMinutes(crime, cfg);
+              jailUntilMs = Date.now() + jailMinutes * 60 * 1000;
+              try {
+                await jsonbService.setKey(userId, guildId, cfg.JAIL_UNTIL_KEY, jailUntilMs);
+              } catch (error) {
+                logger.discord.cmdError('Failed to set jail timer after crime catch:', {
+                  userId,
+                  guildId,
+                  crimeId: crime.id,
+                  error,
+                });
+                jailMinutes = 0;
+                jailUntilMs = 0;
+              }
+            }
+
             finalEmbed = new EmbedBuilder()
               .setColor(CONFIG.COLORS.WARNING ?? CONFIG.COLORS.DEFAULT)
               .setTitle(`🚓 ${crime.label} Busted`)
@@ -287,6 +355,14 @@ class CrimeCommand extends BaseCommand {
                 {
                   name: 'Outcome',
                   value: `Caught (${finePercent}% wallet fine)`,
+                  inline: false,
+                },
+                {
+                  name: 'Jail',
+                  value:
+                    jailMinutes > 0
+                      ? `You were jailed for ${jailMinutes}m. Out <t:${Math.floor(jailUntilMs / 1000)}:R>.`
+                      : 'You dodged jail this time.',
                   inline: false,
                 }
               )
