@@ -7,6 +7,8 @@ import { randomInt } from 'node:crypto';
 import { EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
+import commandSessionService from '../services/commandSessionService.js';
+import deployLockService from '../services/deployLockService.js';
 import economy from '../services/economy.js';
 import jsonbService from '../services/jsonbService.js';
 import logger from '../services/loggerService.js';
@@ -64,12 +66,10 @@ function drawCard(shoe) {
   return shoe.pop();
 }
 
-// Function to format card with suit
 function formatCard(cardObj) {
   return `${cardObj.card}${cardObj.suit}`;
 }
 
-// Function to calculate hand value and softness
 function calculateHandDetails(hand) {
   let value = 0;
   let aces = 0;
@@ -83,7 +83,6 @@ function calculateHandDetails(hand) {
     }
   }
 
-  // Adjust for aces
   while (value > 21 && aces > 0) {
     value -= 10;
     aces--;
@@ -95,9 +94,139 @@ function calculateHandDetails(hand) {
   };
 }
 
-// Function to calculate hand value
 function calculateHandValue(hand) {
   return calculateHandDetails(hand).value;
+}
+
+function buildButtons(canSurrender, isHighTable) {
+  const hitButton = {
+    type: 2,
+    style: isHighTable ? 4 : 1,
+    label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} Hit`,
+    custom_id: 'blackjack:hit',
+  };
+  const standButton = {
+    type: 2,
+    style: isHighTable ? 1 : 4,
+    label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.STAND} Stand`,
+    custom_id: 'blackjack:stand',
+  };
+
+  const components = [hitButton, standButton];
+  if (canSurrender) {
+    components.push({
+      type: 2,
+      style: 2,
+      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} Surrender`,
+      custom_id: 'blackjack:surrender',
+    });
+  }
+
+  return [
+    {
+      type: 1,
+      components,
+    },
+  ];
+}
+
+function buildFooterText(shoeLength, totalShoeCards, allowSurrender) {
+  const instructions = allowSurrender
+    ? `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit, Stand, or Surrender`
+    : `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit or Stand`;
+  return `${instructions} • Shoe: ${shoeLength}/${totalShoeCards}`;
+}
+
+function buildInitialEmbed({
+  bet,
+  isHighTable,
+  canSurrender,
+  playerHand,
+  dealerHand,
+  reshuffleNotice,
+  shoeLength,
+  totalShoeCards,
+}) {
+  const playerValue = calculateHandValue(playerHand);
+  const tableNotice = isHighTable
+    ? `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIGH_TABLE} This is now a High Table. Dealer hits on soft 17.`
+    : `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} Surrender is available before your first action for a 50% refund.`;
+
+  return new EmbedBuilder()
+    .setColor(
+      isHighTable
+        ? CONFIG.COMMANDS.BLACKJACK.COLORS.HIGH_TABLE_IN_PROGRESS
+        : CONFIG.COMMANDS.BLACKJACK.COLORS.IN_PROGRESS
+    )
+    .setTitle(
+      `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${isHighTable ? ' • High Table' : ''}`
+    )
+    .setDescription(
+      `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${tableNotice}${reshuffleNotice}`
+    )
+    .addFields(
+      {
+        name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+        value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
+        inline: true,
+      },
+      {
+        name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+        value: `${formatCard(dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`,
+        inline: true,
+      }
+    )
+    .setFooter({
+      text: buildFooterText(shoeLength, totalShoeCards, canSurrender),
+    });
+}
+
+function parseSession(session) {
+  if (!session || typeof session !== 'object') {
+    return null;
+  }
+
+  try {
+    const bet = BigInt(session.bet);
+    const playerHand = Array.isArray(session.playerHand)
+      ? session.playerHand.filter(isValidCard)
+      : [];
+    const dealerHand = Array.isArray(session.dealerHand)
+      ? session.dealerHand.filter(isValidCard)
+      : [];
+    const shoe = normalizeShoe(session.shoe) || [];
+    const totalShoeCards = Number(session.totalShoeCards || 312);
+
+    if (playerHand.length < 2 || dealerHand.length < 2) {
+      return null;
+    }
+
+    return {
+      ...session,
+      bet,
+      playerHand,
+      dealerHand,
+      shoe,
+      totalShoeCards,
+      canSurrender: Boolean(session.canSurrender),
+      hasTakenAction: Boolean(session.hasTakenAction),
+      isHighTable: Boolean(session.isHighTable),
+      expiresAt: Number(session.expiresAt || 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function persistShoe(userId, guildId, shoeStateKey, shoe) {
+  const shoeCacheKey = getShoeCacheKey(userId, guildId);
+  shoeCache.set(shoeCacheKey, shoe);
+
+  try {
+    await jsonbService.setKey(userId, guildId, shoeStateKey, shoe);
+  } catch (error) {
+    logger.discord.dbError('Failed to persist blackjack shoe:', error);
+  }
 }
 
 class BlackjackCommand extends BaseCommand {
@@ -110,6 +239,8 @@ class BlackjackCommand extends BaseCommand {
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: ['bj', '21'],
       exclusiveSession: true,
+      exclusiveSessionTtlSeconds: 50,
+      interactionPrefix: 'blackjack',
     });
   }
 
@@ -117,12 +248,10 @@ class BlackjackCommand extends BaseCommand {
     const userId = message.author.id;
     const guildId = message.guild.id;
 
-    // Check arguments
     if (args.length !== 1) {
       return message.reply('Please provide an amount to bet. Usage: `blackjack <bet>`');
     }
 
-    // Parse bet amount
     let bet;
     try {
       bet = parsePositiveAmount(args[0], 'Bet amount');
@@ -130,7 +259,6 @@ class BlackjackCommand extends BaseCommand {
       return message.reply('Please provide a valid amount to bet.');
     }
 
-    // Check if user has enough balance
     const balance = await economy.getBalance(userId, guildId);
     if (balance < bet) {
       return message.reply(`You don't have enough Dih! Your balance: ${formatMoney(balance)} cm`);
@@ -164,15 +292,6 @@ class BlackjackCommand extends BaseCommand {
     }
     shoeCache.set(shoeCacheKey, shoe);
 
-    const persistShoe = async () => {
-      shoeCache.set(shoeCacheKey, shoe);
-      try {
-        await jsonbService.setKey(userId, guildId, shoeStateKey, shoe);
-      } catch (error) {
-        logger.discord.dbError('Failed to persist blackjack shoe:', error);
-      }
-    };
-
     const drawFromShoe = () => {
       if (shoe.length === 0) {
         shoe = createShoe();
@@ -181,66 +300,36 @@ class BlackjackCommand extends BaseCommand {
       return drawCard(shoe);
     };
 
-    // Deduct bet up front to prevent timeout/selection exploit
     await economy.updateBalance(userId, guildId, -bet, 'blackjack-bet');
 
-    // Initialize game
     const playerHand = [drawFromShoe(), drawFromShoe()];
     const dealerHand = [drawFromShoe(), drawFromShoe()];
     const playerValue = calculateHandValue(playerHand);
     const reshuffleNotice = shoeReshuffled
       ? '\n🃏 A fresh 6-deck shoe was shuffled for this hand.'
       : '';
-    const tableNotice = isHighTable
-      ? `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIGH_TABLE} This is now a High Table. Dealer hits on soft 17.`
-      : `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} Surrender is available before your first action for a 50% refund.`;
-    const buildFooterText = (allowSurrender) => {
-      const instructions = allowSurrender
-        ? `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit, Stand, or Surrender`
-        : `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.INSTRUCTIONS} React with Hit or Stand`;
-      return `${instructions} • Shoe: ${shoe.length}/${totalShoeCards}`;
-    };
 
-    // Create initial game embed
-    const gameEmbed = new EmbedBuilder()
-      .setColor(
-        isHighTable
-          ? CONFIG.COMMANDS.BLACKJACK.COLORS.HIGH_TABLE_IN_PROGRESS
-          : CONFIG.COMMANDS.BLACKJACK.COLORS.IN_PROGRESS
-      )
-      .setTitle(
-        `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${isHighTable ? ' • High Table' : ''}`
-      )
-      .setDescription(
-        `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${tableNotice}${reshuffleNotice}`
-      )
-      .addFields(
-        {
-          name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
-          value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
-          inline: true,
-        },
-        {
-          name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
-          value: `${formatCard(dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`,
-          inline: true,
-        }
-      )
-      .setFooter({
-        text: buildFooterText(canSurrender),
-      });
+    const gameEmbed = buildInitialEmbed({
+      bet,
+      isHighTable,
+      canSurrender,
+      playerHand,
+      dealerHand,
+      reshuffleNotice,
+      shoeLength: shoe.length,
+      totalShoeCards,
+    });
 
-    // Check for blackjack
     if (playerValue === 21) {
       const dealerValue = calculateHandValue(dealerHand);
       if (dealerValue === 21) {
-        await economy.updateBalance(userId, guildId, bet, 'blackjack-push'); // Refund stake
+        await economy.updateBalance(userId, guildId, bet, 'blackjack-push');
         gameEmbed
           .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH)
           .setDescription(
             `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Blackjack! Push - your bet is returned.`
           )
-          .addFields(
+          .setFields(
             {
               name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
               value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
@@ -252,32 +341,31 @@ class BlackjackCommand extends BaseCommand {
               inline: true,
             }
           );
-        await persistShoe();
-        return message.reply({ embeds: [gameEmbed] });
-      } else {
-        const winnings = (bet * 3n) / 2n;
-        // Refund stake + blackjack payout profit
-        await economy.updateBalance(userId, guildId, bet + winnings, 'blackjack-win');
-        gameEmbed
-          .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.WIN)
-          .setDescription(
-            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Blackjack! You win ${formatMoney(winnings)} cm Dih!`
-          )
-          .addFields(
-            {
-              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
-              value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
-              inline: true,
-            },
-            {
-              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
-              value: `${dealerHand.map(formatCard).join(' ')} (${dealerValue})`,
-              inline: true,
-            }
-          );
-        await persistShoe();
+        await persistShoe(userId, guildId, shoeStateKey, shoe);
         return message.reply({ embeds: [gameEmbed] });
       }
+
+      const winnings = (bet * 3n) / 2n;
+      await economy.updateBalance(userId, guildId, bet + winnings, 'blackjack-win');
+      gameEmbed
+        .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.WIN)
+        .setDescription(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Blackjack! You win ${formatMoney(winnings)} cm Dih!`
+        )
+        .setFields(
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+            value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
+            inline: true,
+          },
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+            value: `${dealerHand.map(formatCard).join(' ')} (${dealerValue})`,
+            inline: true,
+          }
+        );
+      await persistShoe(userId, guildId, shoeStateKey, shoe);
+      return message.reply({ embeds: [gameEmbed] });
     }
 
     const dealerInitialValue = calculateHandValue(dealerHand);
@@ -300,238 +388,339 @@ class BlackjackCommand extends BaseCommand {
             inline: true,
           }
         );
-      await persistShoe();
+      await persistShoe(userId, guildId, shoeStateKey, shoe);
       return message.reply({ embeds: [gameEmbed] });
     }
 
-    const hitButton = {
-      type: 2,
-      style: isHighTable ? 4 : 1,
-      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} Hit`,
-      custom_id: 'hit',
-    };
-    const standButton = {
-      type: 2,
-      style: isHighTable ? 1 : 4,
-      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.STAND} Stand`,
-      custom_id: 'stand',
-    };
-    const surrenderButton = {
-      type: 2,
-      style: 2,
-      label: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} Surrender`,
-      custom_id: 'surrender',
-    };
-
-    const rowWithoutSurrender = {
-      type: 1,
-      components: [hitButton, standButton],
-    };
-    const rowWithSurrender = {
-      type: 1,
-      components: [hitButton, standButton, surrenderButton],
-    };
-    const initialRow = canSurrender ? rowWithSurrender : rowWithoutSurrender;
-
     const gameReply = await message.reply({
       embeds: [gameEmbed],
-      components: [initialRow],
+      components: buildButtons(canSurrender, isHighTable),
     });
 
-    // Create collector for button interactions
-    const filter = (i) => i.user.id === userId;
-    const collector = gameReply.createMessageComponentCollector({
-      filter,
-      time: CONFIG.COMMANDS.BLACKJACK.GAME.TIMEOUT,
-    });
-    let hasTakenAction = false;
+    const timeoutMs = CONFIG.COMMANDS.BLACKJACK.GAME.TIMEOUT;
+    const expiresAt = Date.now() + timeoutMs;
+    const stored = await commandSessionService.setSession(
+      'blackjack',
+      gameReply.id,
+      {
+        userId,
+        guildId,
+        bet: bet.toString(),
+        isHighTable,
+        canSurrender,
+        hasTakenAction: false,
+        playerHand,
+        dealerHand,
+        shoe,
+        totalShoeCards,
+        shoeStateKey,
+        expiresAt,
+      },
+      Math.ceil(timeoutMs / 1000) + 30
+    );
 
-    collector.on('collect', async (i) => {
-      if (i.customId === 'surrender') {
-        if (!canSurrender || hasTakenAction) {
-          await i.reply({
+    if (!stored) {
+      await economy.updateBalance(userId, guildId, bet, 'blackjack-push');
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await gameReply
+        .edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(CONFIG.COLORS.ERROR)
+              .setTitle('❌ Blackjack Unavailable')
+              .setDescription('Could not start blackjack session. Your bet was refunded.')
+              .setTimestamp(),
+          ],
+          components: [],
+        })
+        .catch(() => {});
+      await persistShoe(userId, guildId, shoeStateKey, shoe);
+      return { skipCooldown: true };
+    }
+
+    return { keepExclusiveSession: true };
+  }
+
+  async handleInteraction(interaction) {
+    const action = (interaction.customId || '').split(':')[1];
+    if (!action || !['hit', 'stand', 'surrender'].includes(action)) {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const messageId = interaction.message.id;
+    const lockAcquired = await deployLockService.acquireLock(`blackjack:session:${messageId}`, 5);
+    if (!lockAcquired) {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const rawSession = await commandSessionService.getSession('blackjack', messageId);
+    const session = parseSession(rawSession);
+    if (!session) {
+      await interaction
+        .reply({
+          content:
+            'This blackjack hand is no longer active. Start a new game with `blackjack <bet>`.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const { userId, guildId } = session;
+    if (interaction.user.id !== userId) {
+      await interaction
+        .reply({
+          content: 'This blackjack hand is not yours.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const now = Date.now();
+    if (session.expiresAt <= now) {
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE)
+        .setTitle(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${session.isHighTable ? ' • High Table' : ''}`
+        )
+        .setDescription(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TIMEOUT} Game timed out! You forfeited ${formatMoney(session.bet)} cm Dih.`
+        )
+        .setFooter({
+          text: buildFooterText(session.shoe.length, session.totalShoeCards, false),
+        })
+        .setFields(
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+            value: `${session.playerHand.map(formatCard).join(' ')} (${calculateHandValue(session.playerHand)})`,
+            inline: true,
+          },
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+            value: `${formatCard(session.dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`,
+            inline: true,
+          }
+        );
+
+      await interaction.update({ embeds: [timeoutEmbed], components: [] }).catch(async () => {
+        await interaction.message.edit({ embeds: [timeoutEmbed], components: [] }).catch(() => {});
+      });
+
+      await economy.updateBalance(userId, guildId, 0n, 'blackjack-loss').catch((error) => {
+        logger.discord.dbError('Failed to settle timed-out blackjack game:', error);
+      });
+
+      await persistShoe(userId, guildId, session.shoeStateKey, session.shoe);
+      await commandSessionService.deleteSession('blackjack', messageId);
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      return;
+    }
+
+    const drawFromShoe = () => {
+      if (session.shoe.length === 0) {
+        session.shoe = createShoe();
+      }
+      return drawCard(session.shoe);
+    };
+
+    if (action === 'surrender') {
+      if (!session.canSurrender || session.hasTakenAction) {
+        await interaction
+          .reply({
             content:
               'Surrender is only available before your first action on tables below 10,000 cm.',
             ephemeral: true,
-          });
-          return;
-        }
-
-        const refund = bet / 2n;
-        await economy.updateBalance(userId, guildId, refund, 'blackjack-surrender');
-        gameEmbed
-          .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH)
-          .setDescription(
-            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} You surrendered and got back ${formatMoney(refund)} cm Dih.`
-          )
-          .setFooter({
-            text: buildFooterText(canSurrender),
           })
-          .setFields(
-            {
-              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
-              value: `${playerHand.map(formatCard).join(' ')} (${calculateHandValue(playerHand)})`,
-              inline: true,
-            },
-            {
-              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
-              value: `${dealerHand.map(formatCard).join(' ')} (${calculateHandValue(dealerHand)})`,
-              inline: true,
-            }
-          );
-
-        await i.update({
-          embeds: [gameEmbed],
-          components: [],
-        });
-        collector.stop('surrender');
-      } else if (i.customId === 'hit') {
-        hasTakenAction = true;
-        playerHand.push(drawFromShoe());
-        const playerValue = calculateHandValue(playerHand);
-
-        if (playerValue > 21) {
-          await economy.updateBalance(userId, guildId, 0n, 'blackjack-loss');
-          gameEmbed
-            .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE)
-            .setDescription(
-              `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} You drew: ${formatCard(playerHand[playerHand.length - 1])}\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BUST} Bust! You lose ${formatMoney(bet)} cm Dih.`
-            )
-            .setFooter({
-              text: buildFooterText(false),
-            })
-            .addFields(
-              {
-                name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
-                value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
-                inline: true,
-              },
-              {
-                name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
-                value: `${dealerHand.map(formatCard).join(' ')} (${calculateHandValue(dealerHand)})`,
-                inline: true,
-              }
-            );
-          await i.update({
-            embeds: [gameEmbed],
-            components: [],
-          });
-          collector.stop();
-        } else {
-          gameEmbed
-            .setFooter({
-              text: buildFooterText(false),
-            })
-            .setFields(
-              {
-                name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
-                value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
-                inline: true,
-              },
-              {
-                name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
-                value: `${formatCard(dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`,
-                inline: true,
-              }
-            );
-          await i.update({
-            embeds: [gameEmbed],
-            components: [rowWithoutSurrender],
-          });
-        }
-      } else if (i.customId === 'stand') {
-        hasTakenAction = true;
-        // Dealer's turn
-        let dealerDetails = calculateHandDetails(dealerHand);
-        while (
-          dealerDetails.value < CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE ||
-          (isHighTable &&
-            dealerDetails.value === CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE &&
-            dealerDetails.isSoft)
-        ) {
-          dealerHand.push(drawFromShoe());
-          dealerDetails = calculateHandDetails(dealerHand);
-        }
-        const dealerValue = dealerDetails.value;
-
-        const playerValue = calculateHandValue(playerHand);
-        let result;
-        let color;
-
-        if (dealerValue > 21) {
-          result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Dealer busts! You win ${formatMoney(bet)} cm Dih!`;
-          await economy.updateBalance(userId, guildId, bet * 2n, 'blackjack-win');
-          color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
-        } else if (dealerValue > playerValue) {
-          result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.LOSE} Dealer wins! You lose ${formatMoney(bet)} cm Dih.`;
-          await economy.updateBalance(userId, guildId, 0n, 'blackjack-loss');
-          color = CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE;
-        } else if (dealerValue < playerValue) {
-          result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} You win ${formatMoney(bet)} cm Dih!`;
-          await economy.updateBalance(userId, guildId, bet * 2n, 'blackjack-win');
-          color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
-        } else {
-          result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Push - your bet is returned.`;
-          await economy.updateBalance(userId, guildId, bet, 'blackjack-push');
-          color = CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH;
-        }
-
-        gameEmbed
-          .setColor(color)
-          .setDescription(
-            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(bet)} cm\n${result}`
-          )
-          .setFooter({
-            text: buildFooterText(false),
-          })
-          .setFields(
-            {
-              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
-              value: `${playerHand.map(formatCard).join(' ')} (${playerValue})`,
-              inline: true,
-            },
-            {
-              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
-              value: `${dealerHand.map(formatCard).join(' ')} (${dealerValue})`,
-              inline: true,
-            }
-          );
-
-        await i.update({
-          embeds: [gameEmbed],
-          components: [],
-        });
-        collector.stop();
+          .catch(() => {});
+        return;
       }
-    });
 
-    collector.on('end', async (collected, reason) => {
-      await persistShoe();
+      const refund = session.bet / 2n;
+      await economy.updateBalance(userId, guildId, refund, 'blackjack-surrender');
 
-      if (reason === 'time') {
-        gameEmbed
+      const resultEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH)
+        .setTitle(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${session.isHighTable ? ' • High Table' : ''}`
+        )
+        .setDescription(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(session.bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.SURRENDER} You surrendered and got back ${formatMoney(refund)} cm Dih.`
+        )
+        .setFooter({
+          text: buildFooterText(session.shoe.length, session.totalShoeCards, session.canSurrender),
+        })
+        .setFields(
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+            value: `${session.playerHand.map(formatCard).join(' ')} (${calculateHandValue(session.playerHand)})`,
+            inline: true,
+          },
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+            value: `${session.dealerHand.map(formatCard).join(' ')} (${calculateHandValue(session.dealerHand)})`,
+            inline: true,
+          }
+        );
+
+      await interaction.update({ embeds: [resultEmbed], components: [] });
+      await persistShoe(userId, guildId, session.shoeStateKey, session.shoe);
+      await commandSessionService.deleteSession('blackjack', messageId);
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      return;
+    }
+
+    if (action === 'hit') {
+      session.hasTakenAction = true;
+      const drawnCard = drawFromShoe();
+      session.playerHand.push(drawnCard);
+      const playerValue = calculateHandValue(session.playerHand);
+
+      if (playerValue > 21) {
+        await economy.updateBalance(userId, guildId, 0n, 'blackjack-loss');
+
+        const bustEmbed = new EmbedBuilder()
           .setColor(CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE)
+          .setTitle(
+            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${session.isHighTable ? ' • High Table' : ''}`
+          )
           .setDescription(
-            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TIMEOUT} Game timed out! You forfeited ${formatMoney(bet)} cm Dih.`
+            `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(session.bet)} cm\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIT} You drew: ${formatCard(drawnCard)}\n${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BUST} Bust! You lose ${formatMoney(session.bet)} cm Dih.`
           )
           .setFooter({
-            text: buildFooterText(false),
-          });
-        // Always clear buttons first to avoid orphaned/active-looking interactions.
-        await gameReply.edit({ embeds: [gameEmbed], components: [] }).catch((error) => {
-          logger.discord.cmdError('Failed to edit timed-out blackjack message:', error);
-        });
+            text: buildFooterText(session.shoe.length, session.totalShoeCards, false),
+          })
+          .setFields(
+            {
+              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+              value: `${session.playerHand.map(formatCard).join(' ')} (${playerValue})`,
+              inline: true,
+            },
+            {
+              name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+              value: `${session.dealerHand.map(formatCard).join(' ')} (${calculateHandValue(session.dealerHand)})`,
+              inline: true,
+            }
+          );
 
-        await economy.updateBalance(userId, guildId, 0n, 'blackjack-loss').catch((error) => {
-          logger.discord.dbError('Failed to settle timed-out blackjack game:', error);
-        });
+        await interaction.update({ embeds: [bustEmbed], components: [] });
+        await persistShoe(userId, guildId, session.shoeStateKey, session.shoe);
+        await commandSessionService.deleteSession('blackjack', messageId);
+        await commandSessionService.releaseExclusiveSession(userId, guildId);
+        return;
       }
-    });
 
-    // Keep the command session active until the collector ends
-    await new Promise((resolve) => {
-      collector.on('end', resolve);
-    });
+      const inProgressEmbed = new EmbedBuilder()
+        .setColor(
+          session.isHighTable
+            ? CONFIG.COMMANDS.BLACKJACK.COLORS.HIGH_TABLE_IN_PROGRESS
+            : CONFIG.COMMANDS.BLACKJACK.COLORS.IN_PROGRESS
+        )
+        .setTitle(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${session.isHighTable ? ' • High Table' : ''}`
+        )
+        .setDescription(
+          `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(session.bet)} cm`
+        )
+        .setFooter({
+          text: buildFooterText(session.shoe.length, session.totalShoeCards, false),
+        })
+        .setFields(
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+            value: `${session.playerHand.map(formatCard).join(' ')} (${playerValue})`,
+            inline: true,
+          },
+          {
+            name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+            value: `${formatCard(session.dealerHand[0])} ${CONFIG.COMMANDS.BLACKJACK.EMOJIS.HIDDEN}`,
+            inline: true,
+          }
+        );
+
+      await interaction.update({
+        embeds: [inProgressEmbed],
+        components: buildButtons(false, session.isHighTable),
+      });
+
+      const ttlSeconds = Math.max(1, Math.ceil((session.expiresAt - now) / 1000));
+      await commandSessionService.setSession(
+        'blackjack',
+        messageId,
+        {
+          ...session,
+          bet: session.bet.toString(),
+        },
+        ttlSeconds
+      );
+      return;
+    }
+
+    session.hasTakenAction = true;
+    let dealerDetails = calculateHandDetails(session.dealerHand);
+    while (
+      dealerDetails.value < CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE ||
+      (session.isHighTable &&
+        dealerDetails.value === CONFIG.COMMANDS.BLACKJACK.GAME.DEALER_STAND_VALUE &&
+        dealerDetails.isSoft)
+    ) {
+      session.dealerHand.push(drawFromShoe());
+      dealerDetails = calculateHandDetails(session.dealerHand);
+    }
+
+    const dealerValue = dealerDetails.value;
+    const playerValue = calculateHandValue(session.playerHand);
+    let result;
+    let color;
+
+    if (dealerValue > 21) {
+      result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} Dealer busts! You win ${formatMoney(session.bet)} cm Dih!`;
+      await economy.updateBalance(userId, guildId, session.bet * 2n, 'blackjack-win');
+      color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
+    } else if (dealerValue > playerValue) {
+      result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.LOSE} Dealer wins! You lose ${formatMoney(session.bet)} cm Dih.`;
+      await economy.updateBalance(userId, guildId, 0n, 'blackjack-loss');
+      color = CONFIG.COMMANDS.BLACKJACK.COLORS.LOSE;
+    } else if (dealerValue < playerValue) {
+      result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.WIN} You win ${formatMoney(session.bet)} cm Dih!`;
+      await economy.updateBalance(userId, guildId, session.bet * 2n, 'blackjack-win');
+      color = CONFIG.COMMANDS.BLACKJACK.COLORS.WIN;
+    } else {
+      result = `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PUSH} Push - your bet is returned.`;
+      await economy.updateBalance(userId, guildId, session.bet, 'blackjack-push');
+      color = CONFIG.COMMANDS.BLACKJACK.COLORS.PUSH;
+    }
+
+    const resultEmbed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(
+        `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.TITLE} Blackjack${session.isHighTable ? ' • High Table' : ''}`
+      )
+      .setDescription(
+        `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.BET} Bet: ${formatMoney(session.bet)} cm\n${result}`
+      )
+      .setFooter({
+        text: buildFooterText(session.shoe.length, session.totalShoeCards, false),
+      })
+      .setFields(
+        {
+          name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.PLAYER} Your Hand`,
+          value: `${session.playerHand.map(formatCard).join(' ')} (${playerValue})`,
+          inline: true,
+        },
+        {
+          name: `${CONFIG.COMMANDS.BLACKJACK.EMOJIS.DEALER} Dealer's Hand`,
+          value: `${session.dealerHand.map(formatCard).join(' ')} (${dealerValue})`,
+          inline: true,
+        }
+      );
+
+    await interaction.update({ embeds: [resultEmbed], components: [] });
+    await persistShoe(userId, guildId, session.shoeStateKey, session.shoe);
+    await commandSessionService.deleteSession('blackjack', messageId);
+    await commandSessionService.releaseExclusiveSession(userId, guildId);
   }
 }
 

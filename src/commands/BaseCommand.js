@@ -18,6 +18,8 @@ class BaseCommand {
       aliases = [],
       permissions = [],
       exclusiveSession = false,
+      exclusiveSessionTtlSeconds = 60,
+      interactionPrefix = null,
     }
   ) {
     this.client = client;
@@ -30,6 +32,8 @@ class BaseCommand {
     this.aliases = aliases;
     this.permissions = permissions;
     this.exclusiveSession = exclusiveSession;
+    this.exclusiveSessionTtlSeconds = exclusiveSessionTtlSeconds;
+    this.interactionPrefix = interactionPrefix;
   }
 
   /**

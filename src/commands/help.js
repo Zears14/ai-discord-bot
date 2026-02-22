@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
+import commandSessionService from '../services/commandSessionService.js';
 
 const COMMANDS_PER_CATEGORY_PAGE = 8;
 const HELP_COLLECTOR_TIMEOUT_MS = 300000;
@@ -154,31 +155,54 @@ function buildNavigationRow(currentPage, totalPages) {
 
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId('help_first')
+      .setCustomId('help:first')
       .setLabel('⏮️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(disableNav || currentPage === 0),
     new ButtonBuilder()
-      .setCustomId('help_prev')
+      .setCustomId('help:prev')
       .setLabel('◀️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(disableNav || currentPage === 0),
     new ButtonBuilder()
-      .setCustomId('help_page')
+      .setCustomId('help:page')
       .setLabel(`${currentPage + 1}/${totalPages}`)
       .setStyle(ButtonStyle.Primary)
       .setDisabled(true),
     new ButtonBuilder()
-      .setCustomId('help_next')
+      .setCustomId('help:next')
       .setLabel('▶️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(disableNav || currentPage >= totalPages - 1),
     new ButtonBuilder()
-      .setCustomId('help_last')
+      .setCustomId('help:last')
       .setLabel('⏭️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(disableNav || currentPage >= totalPages - 1)
   );
+}
+
+function buildPages(commands, prefix) {
+  const categories = normalizeCommandsByCategory(commands);
+  const pages = [buildOverviewEmbed(prefix, categories, commands.size)];
+
+  for (const [category, commandList] of categories.entries()) {
+    const chunks = chunkArray(commandList, COMMANDS_PER_CATEGORY_PAGE);
+    chunks.forEach((chunk, index) => {
+      pages.push(
+        buildCategoryEmbed({
+          prefix,
+          category,
+          commandChunk: chunk,
+          chunkIndex: index,
+          totalCategoryPages: chunks.length,
+          totalCategoryCommands: commandList.length,
+        })
+      );
+    });
+  }
+
+  return pages;
 }
 
 class HelpCommand extends BaseCommand {
@@ -190,6 +214,7 @@ class HelpCommand extends BaseCommand {
       usage: 'help [command]',
       cooldown: CONFIG.COMMANDS.COOLDOWNS.DEFAULT,
       aliases: ['commands', 'h'],
+      interactionPrefix: 'help',
     });
   }
 
@@ -209,79 +234,108 @@ class HelpCommand extends BaseCommand {
       return message.reply({ embeds: [buildCommandDetailEmbed(command, prefix)] });
     }
 
-    const categories = normalizeCommandsByCategory(commands);
-    const pages = [];
-
-    pages.push(buildOverviewEmbed(prefix, categories, commands.size));
-
-    for (const [category, commandList] of categories.entries()) {
-      const chunks = chunkArray(commandList, COMMANDS_PER_CATEGORY_PAGE);
-      chunks.forEach((chunk, index) => {
-        pages.push(
-          buildCategoryEmbed({
-            prefix,
-            category,
-            commandChunk: chunk,
-            chunkIndex: index,
-            totalCategoryPages: chunks.length,
-            totalCategoryCommands: commandList.length,
-          })
-        );
-      });
-    }
-
+    const pages = buildPages(commands, prefix);
     if (pages.length === 1) {
       return message.reply({ embeds: [pages[0]] });
     }
 
-    let currentPage = 0;
     const helpMessage = await message.reply({
+      embeds: [pages[0]],
+      components: [buildNavigationRow(0, pages.length)],
+    });
+
+    const expiresAt = Date.now() + HELP_COLLECTOR_TIMEOUT_MS;
+    await commandSessionService.setSession(
+      'help',
+      helpMessage.id,
+      {
+        userId: message.author.id,
+        currentPage: 0,
+        expiresAt,
+      },
+      Math.ceil(HELP_COLLECTOR_TIMEOUT_MS / 1000) + 10
+    );
+
+    return null;
+  }
+
+  async handleInteraction(interaction) {
+    const action = (interaction.customId || '').split(':')[1];
+    if (!action || action === 'page') {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const session = await commandSessionService.getSession('help', interaction.message.id);
+    if (!session) {
+      await interaction
+        .reply({
+          content: 'This help menu has expired. Run `help` again.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    if (session.userId !== interaction.user.id) {
+      await interaction
+        .reply({
+          content: 'These buttons are not for you!',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const now = Date.now();
+    if (Number(session.expiresAt || 0) <= now) {
+      await commandSessionService.deleteSession('help', interaction.message.id);
+      await interaction
+        .update({
+          components: [],
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const commands = this.client.commandHandler.commands;
+    const prefix = CONFIG.MESSAGE.PREFIX;
+    const pages = buildPages(commands, prefix);
+    let currentPage = Math.max(0, Math.min(pages.length - 1, Number(session.currentPage || 0)));
+
+    switch (action) {
+      case 'first':
+        currentPage = 0;
+        break;
+      case 'prev':
+        currentPage = Math.max(0, currentPage - 1);
+        break;
+      case 'next':
+        currentPage = Math.min(pages.length - 1, currentPage + 1);
+        break;
+      case 'last':
+        currentPage = pages.length - 1;
+        break;
+      default:
+        break;
+    }
+
+    await interaction.update({
       embeds: [pages[currentPage]],
       components: [buildNavigationRow(currentPage, pages.length)],
     });
 
-    const collector = helpMessage.createMessageComponentCollector({
-      time: HELP_COLLECTOR_TIMEOUT_MS,
-    });
-
-    collector.on('collect', async (interaction) => {
-      if (interaction.user.id !== message.author.id) {
-        return interaction.reply({
-          content: 'These buttons are not for you!',
-          ephemeral: true,
-        });
-      }
-
-      switch (interaction.customId) {
-        case 'help_first':
-          currentPage = 0;
-          break;
-        case 'help_prev':
-          currentPage = Math.max(0, currentPage - 1);
-          break;
-        case 'help_next':
-          currentPage = Math.min(pages.length - 1, currentPage + 1);
-          break;
-        case 'help_last':
-          currentPage = pages.length - 1;
-          break;
-        default:
-          break;
-      }
-
-      await interaction.update({
-        embeds: [pages[currentPage]],
-        components: [buildNavigationRow(currentPage, pages.length)],
-      });
-    });
-
-    collector.on('end', () => {
-      helpMessage
-        .edit({
-          components: [],
-        })
-        .catch(() => {});
-    });
+    const ttlSeconds = Math.max(1, Math.ceil((Number(session.expiresAt) - now) / 1000));
+    await commandSessionService.setSession(
+      'help',
+      interaction.message.id,
+      {
+        userId: session.userId,
+        currentPage,
+        expiresAt: Number(session.expiresAt),
+      },
+      ttlSeconds
+    );
   }
 }
 

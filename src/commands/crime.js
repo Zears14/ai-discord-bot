@@ -7,6 +7,8 @@ import { randomInt } from 'node:crypto';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
+import commandSessionService from '../services/commandSessionService.js';
+import deployLockService from '../services/deployLockService.js';
 import economy from '../services/economy.js';
 import jsonbService from '../services/jsonbService.js';
 import levelService from '../services/levelService.js';
@@ -110,11 +112,11 @@ function buildChoiceEmbed(choices) {
     .setTimestamp();
 }
 
-function buildButtons(choices, nonce, disabled = false) {
+function buildButtons(choices, disabled = false) {
   return new ActionRowBuilder().addComponents(
     ...choices.map((crime) =>
       new ButtonBuilder()
-        .setCustomId(`crime:${nonce}:${crime.id}`)
+        .setCustomId(`crime:pick:${crime.id}`)
         .setLabel(`${crime.emoji} ${crime.label}`.slice(0, 80))
         .setStyle(ButtonStyle.Danger)
         .setDisabled(disabled)
@@ -156,6 +158,8 @@ class CrimeCommand extends BaseCommand {
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: ['crimes'],
       exclusiveSession: true,
+      exclusiveSessionTtlSeconds: 45,
+      interactionPrefix: 'crime',
     });
   }
 
@@ -216,251 +220,323 @@ class CrimeCommand extends BaseCommand {
 
       const choiceCount = Math.min(Math.max(1, cfg.CHOICES_PER_RUN ?? 3), 3);
       const selectedCrimes = sampleCrimes(cfg.CRIMES, choiceCount);
-      const crimeById = new Map(selectedCrimes.map((crime) => [crime.id, crime]));
-      const nonce = randomInt(1_000_000, 9_999_999).toString(36);
-
-      const choiceEmbed = buildChoiceEmbed(selectedCrimes);
-      const activeButtons = buildButtons(selectedCrimes, nonce, false);
-      const disabledButtons = buildButtons(selectedCrimes, nonce, true);
 
       const gameMessage = await message.reply({
-        embeds: [choiceEmbed],
-        components: [activeButtons],
+        embeds: [buildChoiceEmbed(selectedCrimes)],
+        components: [buildButtons(selectedCrimes, false)],
       });
 
-      const collector = gameMessage.createMessageComponentCollector({
-        filter: (interaction) => interaction.user.id === userId,
-        time: cfg.SELECTION_TIMEOUT_MS ?? 25000,
-        max: 1,
-      });
+      const timeoutMs = cfg.SELECTION_TIMEOUT_MS ?? 25000;
+      const expiresAt = Date.now() + timeoutMs;
+      const stored = await commandSessionService.setSession(
+        'crime',
+        gameMessage.id,
+        {
+          userId,
+          guildId,
+          crimeIds: selectedCrimes.map((crime) => crime.id),
+          expiresAt,
+          resolved: false,
+        },
+        Math.ceil(timeoutMs / 1000) + 20
+      );
 
-      let resolved = false;
-
-      collector.on('collect', async (interaction) => {
-        resolved = true;
-
-        try {
-          const parts = interaction.customId.split(':');
-          const selectedCrimeId = parts[2];
-          const crime = crimeById.get(selectedCrimeId);
-
-          if (!crime) {
-            await interaction.reply({
-              content: 'That crime option is no longer valid. Run `crime` again.',
-              ephemeral: true,
-            });
-            return;
-          }
-
-          await interaction.deferUpdate();
-
-          const [walletBalance, bankData, levelData] = await Promise.all([
-            economy.getBalance(userId, guildId),
-            economy.getBankData(userId, guildId),
-            levelService.getLevelData(userId, guildId),
-          ]);
-
-          const siteText = crime.siteText || 'You scope out the target area.';
-          const actionText = crime.actionText || 'You move in and start the job...';
-
-          const death = rollChanceBps(crime.deathChanceBps);
-          const caught = !death && rollChanceBps(crime.failChanceBps);
-
-          let finalEmbed;
-
-          if (death) {
-            const minLoss = Math.max(1, cfg.DEATH_LOSS_MIN_PERCENT ?? 25);
-            const maxLoss = Math.max(minLoss, cfg.DEATH_LOSS_MAX_PERCENT ?? 75);
-            const percentLoss = randomInt(minLoss, maxLoss + 1);
-            const moneyLost = computePercentLoss(walletBalance, percentLoss);
-
-            let newWallet = walletBalance;
-            if (moneyLost > 0n) {
-              const result = await economy.updateBalance(
-                userId,
-                guildId,
-                -moneyLost,
-                `crime-${crime.id}-death-loss`
-              );
-              newWallet = result.balance;
-            }
-
-            finalEmbed = new EmbedBuilder()
-              .setColor(CONFIG.COLORS.ERROR)
-              .setTitle(`☠️ ${crime.label} Failed`)
-              .setDescription(crime.deathText || 'You died during the attempt.')
-              .addFields(
-                { name: 'Loss', value: `${formatMoney(moneyLost)} cm`, inline: true },
-                { name: 'Wallet Left', value: `${formatMoney(newWallet)} cm`, inline: true },
-                { name: 'Outcome', value: `Fatal (${percentLoss}% wallet loss)`, inline: false }
-              )
-              .setTimestamp();
-
-            await playCrimeAnimation(
-              gameMessage,
-              `🚨 Crime: ${crime.label}`,
-              siteText,
-              actionText,
-              finalEmbed,
-              [disabledButtons]
-            );
-            collector.stop('resolved');
-            return;
-          }
-
-          if (caught) {
-            const minFine = Math.max(1, crime.fineMinPercent ?? 5);
-            const maxFine = Math.max(minFine, crime.fineMaxPercent ?? 15);
-            const finePercent = randomInt(minFine, maxFine + 1);
-            const fine = computePercentLoss(walletBalance, finePercent);
-
-            let newWallet = walletBalance;
-            if (fine > 0n) {
-              const result = await economy.updateBalance(
-                userId,
-                guildId,
-                -fine,
-                `crime-${crime.id}-fine`
-              );
-              newWallet = result.balance;
-            }
-
-            let jailMinutes = 0;
-            let jailUntilMs = 0;
-            const jailChanceBps = computeJailChanceBps(crime, cfg);
-            if (rollChanceBps(jailChanceBps)) {
-              jailMinutes = chooseJailDurationMinutes(crime, cfg);
-              jailUntilMs = Date.now() + jailMinutes * 60 * 1000;
-              try {
-                await jsonbService.setKey(userId, guildId, cfg.JAIL_UNTIL_KEY, jailUntilMs);
-              } catch (error) {
-                logger.discord.cmdError('Failed to set jail timer after crime catch:', {
-                  userId,
-                  guildId,
-                  crimeId: crime.id,
-                  error,
-                });
-                jailMinutes = 0;
-                jailUntilMs = 0;
-              }
-            }
-
-            finalEmbed = new EmbedBuilder()
-              .setColor(CONFIG.COLORS.WARNING ?? CONFIG.COLORS.DEFAULT)
-              .setTitle(`🚓 ${crime.label} Busted`)
-              .setDescription(crime.failText || 'You got caught and paid a heavy fine.')
-              .addFields(
-                { name: 'Fine Paid', value: `${formatMoney(fine)} cm`, inline: true },
-                { name: 'Wallet Left', value: `${formatMoney(newWallet)} cm`, inline: true },
-                {
-                  name: 'Outcome',
-                  value: `Caught (${finePercent}% wallet fine)`,
-                  inline: false,
-                },
-                {
-                  name: 'Jail',
-                  value:
-                    jailMinutes > 0
-                      ? `You were jailed for ${jailMinutes}m. Out <t:${Math.floor(jailUntilMs / 1000)}:R>.`
-                      : 'You dodged jail this time.',
-                  inline: false,
-                }
-              )
-              .setTimestamp();
-
-            await playCrimeAnimation(
-              gameMessage,
-              `🚨 Crime: ${crime.label}`,
-              siteText,
-              actionText,
-              finalEmbed,
-              [disabledButtons]
-            );
-            collector.stop('resolved');
-            return;
-          }
-
-          const baseReward = BigInt(randomInt(crime.rewardMin, crime.rewardMax + 1));
-          const scaled = computeScaledAdventureReward(
-            baseReward,
-            bankData.totalBalance,
-            levelData.level,
-            cfg.SCALING
-          );
-          const finalReward = scaled.reward;
-
-          let newWallet = walletBalance;
-          if (finalReward > 0n) {
-            const result = await economy.updateBalance(
-              userId,
-              guildId,
-              finalReward,
-              `crime-${crime.id}-reward`
-            );
-            newWallet = result.balance;
-          }
-
-          finalEmbed = new EmbedBuilder()
-            .setColor(CONFIG.COLORS.SUCCESS)
-            .setTitle(`💸 ${crime.label} Success`)
-            .setDescription(crime.successText || 'The job paid out.')
-            .addFields(
-              { name: 'Reward', value: `+${formatMoney(finalReward)} cm`, inline: true },
-              { name: 'New Wallet', value: `${formatMoney(newWallet)} cm`, inline: true },
-              { name: 'Outcome', value: 'Clean getaway', inline: false }
-            )
-            .setTimestamp();
-
-          await playCrimeAnimation(
-            gameMessage,
-            `🚨 Crime: ${crime.label}`,
-            siteText,
-            actionText,
-            finalEmbed,
-            [disabledButtons]
-          );
-          collector.stop('resolved');
-        } catch (error) {
-          logger.discord.cmdError('Crime collect handler error:', {
-            userId,
-            guildId,
-            error,
-          });
-
-          const errorEmbed = new EmbedBuilder()
-            .setColor(CONFIG.COLORS.ERROR)
-            .setTitle('❌ Crime Failed')
-            .setDescription('An unexpected error happened while resolving your crime.')
-            .setTimestamp();
-
-          await gameMessage.edit({ embeds: [errorEmbed], components: [] }).catch(() => {});
-          collector.stop('error');
-        }
-      });
-
-      collector.on('end', async (_collected, reason) => {
-        if (reason !== 'time' || resolved) {
-          return;
-        }
-
-        const timeoutEmbed = new EmbedBuilder()
-          .setColor(CONFIG.COLORS.DEFAULT)
-          .setTitle('⌛ Crime Cancelled')
-          .setDescription('You took too long to choose. The opportunity is gone.')
-          .setTimestamp();
-
+      if (!stored) {
+        await commandSessionService.releaseExclusiveSession(userId, guildId);
         await gameMessage
-          .edit({ embeds: [timeoutEmbed], components: [disabledButtons] })
+          .edit({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(CONFIG.COLORS.ERROR)
+                .setTitle('❌ Crime Unavailable')
+                .setDescription('Could not start crime session. Please try again.')
+                .setTimestamp(),
+            ],
+            components: [],
+          })
           .catch(() => {});
-      });
+        return { skipCooldown: true };
+      }
 
-      await new Promise((resolve) => {
-        collector.on('end', resolve);
-      });
-      return;
+      return { keepExclusiveSession: true };
     } catch (error) {
       logger.discord.cmdError('Crime command error:', { userId, guildId, error });
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
       return message.reply('Crime failed due to an error. Please try again later.');
+    }
+  }
+
+  async handleInteraction(interaction) {
+    const parts = (interaction.customId || '').split(':');
+    const action = parts[1];
+    const selectedCrimeId = parts[2];
+    if (action !== 'pick' || !selectedCrimeId) {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const messageId = interaction.message.id;
+    const lockAcquired = await deployLockService.acquireLock(`crime:session:${messageId}`, 5);
+    if (!lockAcquired) {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const session = await commandSessionService.getSession('crime', messageId);
+    if (!session) {
+      await interaction
+        .reply({
+          content: 'That crime session has expired. Run `crime` again.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const userId = session.userId;
+    const guildId = session.guildId;
+    if (interaction.user.id !== userId) {
+      await interaction
+        .reply({
+          content: 'These crime buttons are not for you.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const cfg = CONFIG.COMMANDS.CRIME;
+    const expiresAt = Number(session.expiresAt || 0);
+    const now = Date.now();
+    const crimeLookup = new Map(cfg.CRIMES.map((crime) => [crime.id, crime]));
+    const sessionCrimes = (session.crimeIds || []).map((id) => crimeLookup.get(id)).filter(Boolean);
+    const disabledButtons = buildButtons(sessionCrimes, true);
+
+    if (Boolean(session.resolved) || expiresAt <= now) {
+      await commandSessionService.deleteSession('crime', messageId);
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
+
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.DEFAULT)
+        .setTitle('⌛ Crime Cancelled')
+        .setDescription('You took too long to choose. The opportunity is gone.')
+        .setTimestamp();
+
+      await interaction
+        .update({
+          embeds: [timeoutEmbed],
+          components: [disabledButtons],
+        })
+        .catch(async () => {
+          await interaction.message
+            .edit({ embeds: [timeoutEmbed], components: [disabledButtons] })
+            .catch(() => {});
+        });
+      return;
+    }
+
+    if (!session.crimeIds?.includes(selectedCrimeId)) {
+      await interaction
+        .reply({
+          content: 'That crime option is no longer valid. Run `crime` again.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const crime = crimeLookup.get(selectedCrimeId);
+    if (!crime) {
+      await interaction
+        .reply({
+          content: 'That crime option is unavailable right now. Run `crime` again.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    await interaction.deferUpdate().catch(() => {});
+
+    try {
+      const [walletBalance, bankData, levelData] = await Promise.all([
+        economy.getBalance(userId, guildId),
+        economy.getBankData(userId, guildId),
+        levelService.getLevelData(userId, guildId),
+      ]);
+
+      const siteText = crime.siteText || 'You scope out the target area.';
+      const actionText = crime.actionText || 'You move in and start the job...';
+
+      const death = rollChanceBps(crime.deathChanceBps);
+      const caught = !death && rollChanceBps(crime.failChanceBps);
+
+      let finalEmbed;
+
+      if (death) {
+        const minLoss = Math.max(1, cfg.DEATH_LOSS_MIN_PERCENT ?? 25);
+        const maxLoss = Math.max(minLoss, cfg.DEATH_LOSS_MAX_PERCENT ?? 75);
+        const percentLoss = randomInt(minLoss, maxLoss + 1);
+        const moneyLost = computePercentLoss(walletBalance, percentLoss);
+
+        let newWallet = walletBalance;
+        if (moneyLost > 0n) {
+          const result = await economy.updateBalance(
+            userId,
+            guildId,
+            -moneyLost,
+            `crime-${crime.id}-death-loss`
+          );
+          newWallet = result.balance;
+        }
+
+        finalEmbed = new EmbedBuilder()
+          .setColor(CONFIG.COLORS.ERROR)
+          .setTitle(`☠️ ${crime.label} Failed`)
+          .setDescription(crime.deathText || 'You died during the attempt.')
+          .addFields(
+            { name: 'Loss', value: `${formatMoney(moneyLost)} cm`, inline: true },
+            { name: 'Wallet Left', value: `${formatMoney(newWallet)} cm`, inline: true },
+            { name: 'Outcome', value: `Fatal (${percentLoss}% wallet loss)`, inline: false }
+          )
+          .setTimestamp();
+
+        await playCrimeAnimation(
+          interaction.message,
+          `🚨 Crime: ${crime.label}`,
+          siteText,
+          actionText,
+          finalEmbed,
+          [disabledButtons]
+        );
+      } else if (caught) {
+        const minFine = Math.max(1, crime.fineMinPercent ?? 5);
+        const maxFine = Math.max(minFine, crime.fineMaxPercent ?? 15);
+        const finePercent = randomInt(minFine, maxFine + 1);
+        const fine = computePercentLoss(walletBalance, finePercent);
+
+        let newWallet = walletBalance;
+        if (fine > 0n) {
+          const result = await economy.updateBalance(
+            userId,
+            guildId,
+            -fine,
+            `crime-${crime.id}-fine`
+          );
+          newWallet = result.balance;
+        }
+
+        let jailMinutes = 0;
+        let jailUntilMs = 0;
+        const jailChanceBps = computeJailChanceBps(crime, cfg);
+        if (rollChanceBps(jailChanceBps)) {
+          jailMinutes = chooseJailDurationMinutes(crime, cfg);
+          jailUntilMs = Date.now() + jailMinutes * 60 * 1000;
+          try {
+            await jsonbService.setKey(userId, guildId, cfg.JAIL_UNTIL_KEY, jailUntilMs);
+          } catch (error) {
+            logger.discord.cmdError('Failed to set jail timer after crime catch:', {
+              userId,
+              guildId,
+              crimeId: crime.id,
+              error,
+            });
+            jailMinutes = 0;
+            jailUntilMs = 0;
+          }
+        }
+
+        finalEmbed = new EmbedBuilder()
+          .setColor(CONFIG.COLORS.WARNING ?? CONFIG.COLORS.DEFAULT)
+          .setTitle(`🚓 ${crime.label} Busted`)
+          .setDescription(crime.failText || 'You got caught and paid a heavy fine.')
+          .addFields(
+            { name: 'Fine Paid', value: `${formatMoney(fine)} cm`, inline: true },
+            { name: 'Wallet Left', value: `${formatMoney(newWallet)} cm`, inline: true },
+            {
+              name: 'Outcome',
+              value: `Caught (${finePercent}% wallet fine)`,
+              inline: false,
+            },
+            {
+              name: 'Jail',
+              value:
+                jailMinutes > 0
+                  ? `You were jailed for ${jailMinutes}m. Out <t:${Math.floor(jailUntilMs / 1000)}:R>.`
+                  : 'You dodged jail this time.',
+              inline: false,
+            }
+          )
+          .setTimestamp();
+
+        await playCrimeAnimation(
+          interaction.message,
+          `🚨 Crime: ${crime.label}`,
+          siteText,
+          actionText,
+          finalEmbed,
+          [disabledButtons]
+        );
+      } else {
+        const baseReward = BigInt(randomInt(crime.rewardMin, crime.rewardMax + 1));
+        const scaled = computeScaledAdventureReward(
+          baseReward,
+          bankData.totalBalance,
+          levelData.level,
+          cfg.SCALING
+        );
+        const finalReward = scaled.reward;
+
+        let newWallet = walletBalance;
+        if (finalReward > 0n) {
+          const result = await economy.updateBalance(
+            userId,
+            guildId,
+            finalReward,
+            `crime-${crime.id}-reward`
+          );
+          newWallet = result.balance;
+        }
+
+        finalEmbed = new EmbedBuilder()
+          .setColor(CONFIG.COLORS.SUCCESS)
+          .setTitle(`💸 ${crime.label} Success`)
+          .setDescription(crime.successText || 'The job paid out.')
+          .addFields(
+            { name: 'Reward', value: `+${formatMoney(finalReward)} cm`, inline: true },
+            { name: 'New Wallet', value: `${formatMoney(newWallet)} cm`, inline: true },
+            { name: 'Outcome', value: 'Clean getaway', inline: false }
+          )
+          .setTimestamp();
+
+        await playCrimeAnimation(
+          interaction.message,
+          `🚨 Crime: ${crime.label}`,
+          siteText,
+          actionText,
+          finalEmbed,
+          [disabledButtons]
+        );
+      }
+
+      await commandSessionService.deleteSession('crime', messageId);
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
+    } catch (error) {
+      logger.discord.cmdError('Crime collect handler error:', {
+        userId,
+        guildId,
+        error,
+      });
+
+      const errorEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.ERROR)
+        .setTitle('❌ Crime Failed')
+        .setDescription('An unexpected error happened while resolving your crime.')
+        .setTimestamp();
+
+      await interaction.message.edit({ embeds: [errorEmbed], components: [] }).catch(() => {});
+      await commandSessionService.deleteSession('crime', messageId);
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
     }
   }
 }

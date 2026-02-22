@@ -2229,34 +2229,9 @@ async function healthCheck() {
   }
 }
 
-// Enhanced graceful shutdown handlers with single cleanup call
-const gracefulShutdown = (signal) => {
-  logger.info(`Received ${signal}, starting graceful shutdown...`);
-  cleanup().finally(() => {
-    logger.info(`Exiting on ${signal}`);
-    process.exit(0);
-  });
-};
-
 function getCacheStats() {
   return { size: userCache.size, ttl: CACHE_TTL };
 }
-
-// Register shutdown handlers
-process.once('SIGINT', () => gracefulShutdown('SIGINT'));
-process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.once('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
-
-// Handle uncaught exceptions and unhandled rejections
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('unhandledRejection');
-});
 
 export default {
   // Backward compatible exports

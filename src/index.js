@@ -10,6 +10,8 @@ import { Client, GatewayIntentBits, ActivityType } from 'discord.js';
 import CONFIG from './config/config.js';
 import CommandHandler from './handlers/CommandHandler.js';
 import ItemHandler from './handlers/ItemHandler.js';
+import commandSessionService from './services/commandSessionService.js';
+import deployLockService from './services/deployLockService.js';
 import economyService from './services/economy.js';
 import inventoryService from './services/inventoryService.js';
 import logger from './services/loggerService.js';
@@ -22,12 +24,12 @@ process.on('unhandledRejection', (error) => {
 process.on('uncaughtException', (error) => {
   logger.discord.error('Uncaught exception:', error);
   // Attempt graceful shutdown
-  gracefulShutdown();
+  gracefulShutdown('uncaughtException').catch(() => {});
 });
 
 // Memory leak detection
 const memoryUsageThreshold = 1024 * 1024 * 1024 * 2; // 2GB
-setInterval(() => {
+const memoryMonitorInterval = setInterval(() => {
   const memoryUsage = process.memoryUsage();
   if (memoryUsage.heapUsed > memoryUsageThreshold) {
     logger.warn('High memory usage detected:', memoryUsage);
@@ -165,6 +167,8 @@ inventoryService.init(itemHandler);
 const LOAN_REMINDER_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 let loanReminderSweepInterval = null;
 let isLoanReminderSweepRunning = false;
+let isShuttingDown = false;
+let shutdownPromise = null;
 
 function buildLoanReminderMessage(reminder, serverName) {
   if (reminder.type === 'near-due') {
@@ -186,6 +190,10 @@ function buildLoanReminderMessage(reminder, serverName) {
 }
 
 async function runLoanReminderSweep() {
+  if (isShuttingDown) {
+    return;
+  }
+
   if (isLoanReminderSweepRunning) {
     return;
   }
@@ -271,7 +279,13 @@ const messageQueue = new Map();
 const MESSAGE_QUEUE_TIMEOUT = 1000; // 1 second
 
 client.on('messageCreate', async (message) => {
+  if (isShuttingDown) return;
   if (message.author.bot || message.system) return;
+
+  const lockAcquired = await deployLockService.acquireLock(`message:${message.id}`, 10);
+  if (!lockAcquired) {
+    return;
+  }
 
   const queueKey = `${message.channelId}-${message.author.id}`;
   const existingTimeout = messageQueue.get(queueKey);
@@ -292,6 +306,20 @@ client.on('messageCreate', async (message) => {
   messageQueue.set(queueKey, timeout);
 });
 
+client.on('interactionCreate', async (interaction) => {
+  if (isShuttingDown) return;
+  if (!interaction.isButton()) {
+    return;
+  }
+
+  const lockAcquired = await deployLockService.acquireLock(`interaction:${interaction.id}`, 10);
+  if (!lockAcquired) {
+    return;
+  }
+
+  await commandHandler.handleInteraction(interaction);
+});
+
 // Enhanced error handling for Discord events
 client.on('error', (error) => {
   logger.discord.error('Discord client error:', error);
@@ -306,6 +334,10 @@ client.on('warn', (warning) => {
 });
 
 client.on('disconnect', () => {
+  if (isShuttingDown) {
+    return;
+  }
+
   logger.discord.disconnect('Bot disconnected from Discord!');
   // Attempt to reconnect
   setTimeout(() => {
@@ -318,32 +350,129 @@ client.on('reconnecting', () => {
 });
 
 /**
- * Graceful shutdown function
+ * Clear pending message queue timeouts.
  */
-async function gracefulShutdown() {
-  logger.discord.disconnect('Initiating graceful shutdown...');
+function clearMessageQueue() {
+  for (const timeout of messageQueue.values()) {
+    clearTimeout(timeout);
+  }
+  messageQueue.clear();
+}
+
+/**
+ * Close health server if running.
+ */
+async function closeHealthServer() {
+  const server = CONFIG.getServer();
+  if (!server) {
+    return;
+  }
 
   try {
-    if (loanReminderSweepInterval) {
-      clearInterval(loanReminderSweepInterval);
-      loanReminderSweepInterval = null;
-    }
-
-    // Close Discord connection
-    await client.destroy();
-
-    // Close health server
-    const server = CONFIG.getServer();
-    if (server) {
+    if (typeof server.stop === 'function') {
+      server.stop(true);
+    } else if (typeof server.close === 'function') {
       await new Promise((resolve) => server.close(resolve));
     }
-
-    logger.discord.disconnect('Graceful shutdown complete');
-    process.exit(0);
   } catch (error) {
-    logger.discord.error('Error during graceful shutdown:', error);
-    process.exit(1);
+    logger.warn('Failed to close health server cleanly', {
+      module: 'server',
+      error,
+    });
+  } finally {
+    CONFIG.setServer(null);
   }
+}
+
+/**
+ * Cleanup transient runtime resources used by this process.
+ */
+async function cleanupRuntimeResources() {
+  // Release startup lock first so replacement instances can proceed immediately.
+  await deployLockService.releaseStartupLock().catch((error) => {
+    logger.warn('Failed to release startup lock during shutdown', {
+      module: 'redis-lock',
+      error,
+    });
+  });
+
+  if (loanReminderSweepInterval) {
+    clearInterval(loanReminderSweepInterval);
+    loanReminderSweepInterval = null;
+  }
+  isLoanReminderSweepRunning = false;
+  clearMessageQueue();
+  clearInterval(memoryMonitorInterval);
+
+  await client.destroy().catch((error) => {
+    logger.warn('Failed to destroy Discord client cleanly', {
+      module: 'discord',
+      error,
+    });
+  });
+
+  await economyService.cleanup().catch((error) => {
+    logger.warn('Failed to cleanup economy service cleanly', {
+      module: 'database',
+      error,
+    });
+  });
+
+  await commandSessionService.cleanup().catch((error) => {
+    logger.warn('Failed to close command session redis client cleanly', {
+      module: 'redis-session',
+      error,
+    });
+  });
+
+  await deployLockService.cleanup().catch((error) => {
+    logger.warn('Failed to close deploy lock redis client cleanly', {
+      module: 'redis-lock',
+      error,
+    });
+  });
+
+  await closeHealthServer();
+}
+
+/**
+ * Graceful shutdown function.
+ */
+async function gracefulShutdown(reason = 'shutdown') {
+  if (shutdownPromise) {
+    return shutdownPromise;
+  }
+
+  isShuttingDown = true;
+  logger.discord.disconnect(`Initiating graceful shutdown (${reason})...`);
+
+  shutdownPromise = (async () => {
+    let exitCode = 0;
+    try {
+      await cleanupRuntimeResources();
+      logger.discord.disconnect('Graceful shutdown complete');
+    } catch (error) {
+      exitCode = 1;
+      logger.discord.error('Error during graceful shutdown:', error);
+    } finally {
+      process.exit(exitCode);
+    }
+  })();
+
+  return shutdownPromise;
+}
+
+/**
+ * Reset transient startup state in case startup is retried in the same process.
+ */
+async function prepareForStartup() {
+  clearMessageQueue();
+  if (loanReminderSweepInterval) {
+    clearInterval(loanReminderSweepInterval);
+    loanReminderSweepInterval = null;
+  }
+  isLoanReminderSweepRunning = false;
+  await closeHealthServer();
 }
 
 /**
@@ -355,12 +484,22 @@ async function startBot() {
     // Validate environment variables
     validateEnvironment();
 
-    // Initialize database schema before any other startup work
-    await economyService.initializeDatabase();
+    await prepareForStartup();
+    isShuttingDown = false;
 
-    // Set up the health check server
+    // Bring up health endpoint before lock wait so orchestration sees this instance as alive.
     const server = await setupHealthServer();
     CONFIG.setServer(server);
+
+    // Ensure only one instance logs in at a time during rolling deploy overlap.
+    await deployLockService.acquireStartupLock({
+      key: 'bot-login',
+      ttlSeconds: 30,
+      pollMs: 5000,
+    });
+
+    // Initialize database schema before any other startup work
+    await economyService.initializeDatabase();
 
     // Login to Discord with retry logic
     let retries = 3;
@@ -378,14 +517,28 @@ async function startBot() {
     }
     logger.discord.ready('Bot startup complete!');
   } catch (error) {
+    await cleanupRuntimeResources().catch(() => {});
     logger.discord.error('Critical startup error:', error);
     process.exit(1);
   }
 }
 
-// Handle graceful shutdown
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
+// Handle graceful shutdown for all catchable stop/terminate signals.
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGQUIT', 'SIGHUP', 'SIGBREAK', 'SIGUSR1', 'SIGUSR2'];
+
+for (const signal of STOP_SIGNALS) {
+  try {
+    process.on(signal, () => {
+      gracefulShutdown(signal).catch(() => {});
+    });
+  } catch (error) {
+    logger.warn('Signal is not supported on this platform', {
+      module: 'shutdown',
+      signal,
+      error,
+    });
+  }
+}
 
 // Start the bot
 startBot();

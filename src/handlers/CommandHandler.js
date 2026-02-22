@@ -10,6 +10,7 @@ import { Collection } from 'discord.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import CONFIG from '../config/config.js';
+import commandSessionService from '../services/commandSessionService.js';
 import economyService from '../services/economy.js';
 import jsonbService from '../services/jsonbService.js';
 import levelService from '../services/levelService.js';
@@ -35,7 +36,7 @@ class CommandHandler {
     this.aliases = new Collection();
     this.categories = new Set();
     this.cooldowns = new Collection();
-    this.activeUserCommands = new Collection();
+    this.interactionCommands = new Collection();
 
     // WeakMap for storing command metadata to allow garbage collection
     this.commandMetadata = new WeakMap();
@@ -110,6 +111,13 @@ class CommandHandler {
 
             this.commands.set(command.name, command);
             this.categories.add(command.category);
+            if (
+              typeof command.interactionPrefix === 'string' &&
+              command.interactionPrefix.length > 0 &&
+              typeof command.handleInteraction === 'function'
+            ) {
+              this.interactionCommands.set(command.interactionPrefix, command);
+            }
 
             // Register aliases using a more efficient approach
             if (command.aliases?.length) {
@@ -143,17 +151,36 @@ class CommandHandler {
    * @param {Object} command - Command object
    * @returns {number} Remaining cooldown time in seconds
    */
-  getCooldownRemaining(userId, command) {
-    const now = Date.now();
-    const timestamps = this.cooldowns.get(command.name);
-    if (!timestamps) return 0;
-
-    const expirationTime = timestamps.get(userId);
-    if (expirationTime && now < expirationTime) {
-      return (expirationTime - now) / 1000;
+  async getCooldownRemaining(userId, guildId, command) {
+    const cooldownAmount = (command.cooldown ?? CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
+    if (cooldownAmount <= 0) {
+      return 0;
     }
 
-    return 0;
+    const now = Date.now();
+    const timestamps = this.cooldowns.get(command.name);
+    const localRemaining = (() => {
+      if (!timestamps) return 0;
+
+      const expirationTime = timestamps.get(userId);
+      if (expirationTime && now < expirationTime) {
+        return (expirationTime - now) / 1000;
+      }
+
+      return 0;
+    })();
+
+    if (localRemaining > 0) {
+      return localRemaining;
+    }
+
+    const persistedRemaining = await commandSessionService.getCommandCooldownRemaining(
+      userId,
+      guildId,
+      command.name
+    );
+
+    return Math.max(localRemaining, persistedRemaining);
   }
 
   /**
@@ -161,14 +188,17 @@ class CommandHandler {
    * @param {string} userId - User ID
    * @param {Object} command - Command object
    */
-  setCooldown(userId, command) {
+  async setCooldown(userId, guildId, command) {
     const now = Date.now();
     const cooldownAmount = (command.cooldown ?? CONFIG.COMMANDS.COOLDOWNS.DEFAULT) * 1000;
     if (cooldownAmount <= 0) return;
+    const expiresAt = now + cooldownAmount;
     const timestamps =
       this.cooldowns.get(command.name) ||
       this.cooldowns.set(command.name, new Collection()).get(command.name);
-    timestamps.set(userId, now + cooldownAmount);
+    timestamps.set(userId, expiresAt);
+
+    await commandSessionService.setCommandCooldown(userId, guildId, command.name, expiresAt);
   }
 
   /**
@@ -353,6 +383,47 @@ class CommandHandler {
   }
 
   /**
+   * Handles Discord component interactions for commands that opt in.
+   * @param {import('discord.js').Interaction} interaction
+   * @returns {Promise<void>}
+   */
+  async handleInteraction(interaction) {
+    if (!interaction?.isButton?.()) {
+      return;
+    }
+
+    const customId = interaction.customId || '';
+    const prefix = customId.split(':')[0];
+    if (!prefix) {
+      return;
+    }
+
+    const command = this.interactionCommands.get(prefix);
+    if (!command || typeof command.handleInteraction !== 'function') {
+      return;
+    }
+
+    try {
+      await command.handleInteraction(interaction);
+    } catch (error) {
+      logger.discord.cmdError('Error handling interaction:', {
+        command: command.name,
+        customId,
+        error,
+      });
+
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction
+          .reply({
+            content: 'An unexpected error occurred while handling this interaction.',
+            ephemeral: true,
+          })
+          .catch(() => {});
+      }
+    }
+  }
+
+  /**
    * Handles incoming messages and executes appropriate commands
    * @param {Message} message - Discord.js message object
    * @returns {Promise<void>}
@@ -396,46 +467,74 @@ class CommandHandler {
     }
 
     await this.notifyLoanReminders(message);
+    const hasExclusiveSession = Boolean(command.exclusiveSession);
 
-    // Prevent concurrent command sessions per user
-    const activeCommand = this.activeUserCommands.get(message.author.id);
-    if (activeCommand) {
-      return message.reply(
-        `You already have an active \`${activeCommand}\` session. Finish it before starting another command.`
+    // For non-exclusive commands, check if another exclusive session is active.
+    if (!hasExclusiveSession) {
+      const activeExclusiveSession = await commandSessionService.getExclusiveSession(
+        message.author.id,
+        message.guild.id
       );
+      if (activeExclusiveSession && activeExclusiveSession.expiresAt > Date.now()) {
+        const activeCommandName = activeExclusiveSession.commandName || 'unknown';
+        return message.reply(
+          `You already have an active \`${activeCommandName}\` session. Finish it before starting another command.`
+        );
+      }
     }
 
     // Check cooldown
-    const cooldownTime = this.getCooldownRemaining(message.author.id, command);
+    const cooldownTime = await this.getCooldownRemaining(
+      message.author.id,
+      message.guild.id,
+      command
+    );
     if (cooldownTime > 0) {
       return message.reply(
         `Please wait ${cooldownTime.toFixed(1)} more second(s) before using the \`${command.name}\` command.`
       );
     }
 
-    const hasExclusiveSession = Boolean(command.exclusiveSession);
     let executionResult;
     let didThrow = false;
+    let acquiredExclusiveSession = false;
 
     try {
       if (hasExclusiveSession) {
-        this.activeUserCommands.set(message.author.id, command.name);
+        const lockResult = await commandSessionService.acquireExclusiveSession(
+          message.author.id,
+          message.guild.id,
+          command.name,
+          command.exclusiveSessionTtlSeconds ?? 60
+        );
+        acquiredExclusiveSession = lockResult.acquired;
+        if (!lockResult.acquired) {
+          const lockedBy = lockResult.session?.commandName || 'another command';
+          return message.reply(
+            `You already have an active \`${lockedBy}\` session. Finish it before starting another command.`
+          );
+        }
       }
       executionResult = await command.execute(message, args);
     } catch (error) {
       didThrow = true;
       await ErrorHandler.handle(error, message, command);
     } finally {
-      // Only clear if this command still owns the active session
-      if (hasExclusiveSession && this.activeUserCommands.get(message.author.id) === command.name) {
-        this.activeUserCommands.delete(message.author.id);
+      const keepExclusiveSession = Boolean(
+        executionResult &&
+          typeof executionResult === 'object' &&
+          executionResult.keepExclusiveSession === true
+      );
+
+      if (hasExclusiveSession && acquiredExclusiveSession && (!keepExclusiveSession || didThrow)) {
+        await commandSessionService.releaseExclusiveSession(message.author.id, message.guild.id);
       }
     }
 
     if (!didThrow) {
       const shouldSkipCooldown = this.shouldSkipCooldown(executionResult);
       if (!shouldSkipCooldown) {
-        this.setCooldown(message.author.id, command);
+        await this.setCooldown(message.author.id, message.guild.id, command);
         const xpResult = await levelService
           .awardCommandXp(message.author.id, message.guild.id, command.name)
           .catch((error) => {

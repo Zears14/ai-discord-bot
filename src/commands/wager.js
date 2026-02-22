@@ -1,8 +1,30 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { randomInt } from 'node:crypto';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
+import commandSessionService from '../services/commandSessionService.js';
+import deployLockService from '../services/deployLockService.js';
 import economy from '../services/economy.js';
 import { formatMoney, parsePositiveAmount } from '../utils/moneyUtils.js';
+
+const WAGER_TIMEOUT_MS = 30000;
+
+function buildWagerButtons(disabled = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('wager:accept')
+      .setLabel('Accept')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('✅')
+      .setDisabled(disabled),
+    new ButtonBuilder()
+      .setCustomId('wager:decline')
+      .setLabel('Decline')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('❌')
+      .setDisabled(disabled)
+  );
+}
 
 class WagerCommand extends BaseCommand {
   constructor(client) {
@@ -14,6 +36,8 @@ class WagerCommand extends BaseCommand {
       cooldown: CONFIG.COMMANDS.COOLDOWNS.ECONOMY,
       aliases: ['bet', 'gamble'],
       exclusiveSession: true,
+      exclusiveSessionTtlSeconds: 45,
+      interactionPrefix: 'wager',
     });
   }
 
@@ -21,7 +45,6 @@ class WagerCommand extends BaseCommand {
     const userId = message.author.id;
     const guildId = message.guild.id;
 
-    // Check arguments
     if (args.length !== 2) {
       const helpEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.ERROR)
@@ -35,7 +58,6 @@ class WagerCommand extends BaseCommand {
       return message.reply({ embeds: [helpEmbed] });
     }
 
-    // Parse target user
     const targetUser = message.mentions.users.first();
     if (!targetUser) {
       const errorEmbed = new EmbedBuilder()
@@ -46,7 +68,6 @@ class WagerCommand extends BaseCommand {
       return message.reply({ embeds: [errorEmbed] });
     }
 
-    // Parse amount
     let amount;
     try {
       amount = parsePositiveAmount(args[1], 'Wager amount');
@@ -59,7 +80,6 @@ class WagerCommand extends BaseCommand {
       return message.reply({ embeds: [errorEmbed] });
     }
 
-    // Prevent self-wagering
     if (targetUser.id === userId) {
       const errorEmbed = new EmbedBuilder()
         .setColor(CONFIG.COLORS.ERROR)
@@ -69,7 +89,6 @@ class WagerCommand extends BaseCommand {
       return message.reply({ embeds: [errorEmbed] });
     }
 
-    // Check if both users have enough balance
     const userBalance = await economy.getBalance(userId, guildId);
     const targetBalance = await economy.getBalance(targetUser.id, guildId);
 
@@ -99,7 +118,6 @@ class WagerCommand extends BaseCommand {
       return message.reply({ embeds: [errorEmbed] });
     }
 
-    // Create wager embed
     const wagerEmbed = new EmbedBuilder()
       .setColor(CONFIG.COLORS.DEFAULT)
       .setTitle('🎲 Wager Request')
@@ -113,102 +131,152 @@ class WagerCommand extends BaseCommand {
       .setFooter({ text: 'Click the buttons below to accept or decline' })
       .setTimestamp();
 
-    // Create buttons
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('accept')
-        .setLabel('Accept')
-        .setStyle(ButtonStyle.Success)
-        .setEmoji('✅'),
-      new ButtonBuilder()
-        .setCustomId('decline')
-        .setLabel('Decline')
-        .setStyle(ButtonStyle.Danger)
-        .setEmoji('❌')
-    );
-
     const wagerMessage = await message.reply({
       embeds: [wagerEmbed],
-      components: [row],
+      components: [buildWagerButtons(false)],
     });
 
-    // Create button collector
-    const filter = (i) => i.user.id === targetUser.id;
-    const collector = wagerMessage.createMessageComponentCollector({
-      filter,
-      time: 30000,
-    });
-    let resolved = false;
+    const expiresAt = Date.now() + WAGER_TIMEOUT_MS;
+    const stored = await commandSessionService.setSession(
+      'wager',
+      wagerMessage.id,
+      {
+        challengerId: userId,
+        challengerName: message.author.username,
+        targetUserId: targetUser.id,
+        targetName: targetUser.username,
+        guildId,
+        amount: amount.toString(),
+        expiresAt,
+        resolved: false,
+      },
+      Math.ceil(WAGER_TIMEOUT_MS / 1000) + 15
+    );
 
-    collector.on('collect', async (i) => {
-      if (resolved) {
-        return i.reply({
-          content: 'This wager has already been resolved.',
+    if (!stored) {
+      await commandSessionService.releaseExclusiveSession(userId, guildId);
+      await wagerMessage
+        .edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(CONFIG.COLORS.ERROR)
+              .setTitle('❌ Wager Unavailable')
+              .setDescription('Could not start wager session. Please try again.')
+              .setTimestamp(),
+          ],
+          components: [],
+        })
+        .catch(() => {});
+      return { skipCooldown: true };
+    }
+
+    return { keepExclusiveSession: true };
+  }
+
+  async handleInteraction(interaction) {
+    const action = (interaction.customId || '').split(':')[1];
+    if (!action || (action !== 'accept' && action !== 'decline')) {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const messageId = interaction.message.id;
+    const lockAcquired = await deployLockService.acquireLock(`wager:session:${messageId}`, 5);
+    if (!lockAcquired) {
+      await interaction.deferUpdate().catch(() => {});
+      return;
+    }
+
+    const session = await commandSessionService.getSession('wager', messageId);
+    if (!session) {
+      await interaction
+        .reply({
+          content: 'This wager has already expired.',
           ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    if (session.targetUserId !== interaction.user.id) {
+      await interaction
+        .reply({
+          content: 'Only the challenged user can respond to this wager.',
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const now = Date.now();
+    const expiresAt = Number(session.expiresAt || 0);
+    if (Boolean(session.resolved) || expiresAt <= now) {
+      await commandSessionService.deleteSession('wager', messageId);
+      await commandSessionService.releaseExclusiveSession(session.challengerId, session.guildId);
+
+      const timeoutEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.ERROR)
+        .setTitle('⏰ Wager Timed Out')
+        .setDescription('The wager request has expired.')
+        .setTimestamp();
+
+      await interaction
+        .update({
+          embeds: [timeoutEmbed],
+          components: [],
+        })
+        .catch(async () => {
+          await interaction.message
+            .edit({ embeds: [timeoutEmbed], components: [] })
+            .catch(() => {});
         });
-      }
+      return;
+    }
 
-      if (i.customId === 'accept') {
-        resolved = true;
-        // 50% chance to win
-        const userWins = Math.random() > 0.5;
-        const winnerId = userWins ? userId : targetUser.id;
-        const loserId = userWins ? targetUser.id : userId;
-        const winnerName = userWins ? message.author.username : targetUser.username;
+    await interaction.deferUpdate().catch(() => {});
 
-        try {
-          await economy.transferBalance(loserId, winnerId, guildId, amount, 'wager');
+    let resultEmbed;
+    if (action === 'accept') {
+      const userWins = randomInt(0, 2) === 1;
+      const winnerId = userWins ? session.challengerId : session.targetUserId;
+      const loserId = userWins ? session.targetUserId : session.challengerId;
+      const winnerName = userWins ? session.challengerName : session.targetName;
+      const amount = BigInt(session.amount);
 
-          const resultEmbed = new EmbedBuilder()
-            .setColor(CONFIG.COLORS.SUCCESS)
-            .setTitle('🎉 Wager Result')
-            .setDescription(`${winnerName} won ${formatMoney(amount)} cm Dih from the wager!`)
-            .addFields(
-              { name: 'Winner', value: winnerName, inline: true },
-              { name: 'Amount Won', value: `${formatMoney(amount)} cm`, inline: true }
-            )
-            .setTimestamp();
+      try {
+        await economy.transferBalance(loserId, winnerId, session.guildId, amount, 'wager');
 
-          await i.update({ embeds: [resultEmbed], components: [] });
-        } catch {
-          const failedEmbed = new EmbedBuilder()
-            .setColor(CONFIG.COLORS.ERROR)
-            .setTitle('❌ Wager Canceled')
-            .setDescription(
-              'Wager could not be settled because one player no longer has enough Dih.'
-            )
-            .setTimestamp();
-
-          await i.update({ embeds: [failedEmbed], components: [] });
-        }
-        collector.stop('resolved');
-      } else {
-        resolved = true;
-        const declineEmbed = new EmbedBuilder()
+        resultEmbed = new EmbedBuilder()
+          .setColor(CONFIG.COLORS.SUCCESS)
+          .setTitle('🎉 Wager Result')
+          .setDescription(`${winnerName} won ${formatMoney(amount)} cm Dih from the wager!`)
+          .addFields(
+            { name: 'Winner', value: winnerName, inline: true },
+            { name: 'Amount Won', value: `${formatMoney(amount)} cm`, inline: true }
+          )
+          .setTimestamp();
+      } catch {
+        resultEmbed = new EmbedBuilder()
           .setColor(CONFIG.COLORS.ERROR)
-          .setTitle('❌ Wager Declined')
-          .setDescription(`${targetUser} declined the wager.`);
-
-        await i.update({ embeds: [declineEmbed], components: [] });
-        collector.stop('declined');
+          .setTitle('❌ Wager Canceled')
+          .setDescription('Wager could not be settled because one player no longer has enough Dih.')
+          .setTimestamp();
       }
+    } else {
+      resultEmbed = new EmbedBuilder()
+        .setColor(CONFIG.COLORS.ERROR)
+        .setTitle('❌ Wager Declined')
+        .setDescription(`<@${session.targetUserId}> declined the wager.`)
+        .setTimestamp();
+    }
+
+    await interaction.editReply({
+      embeds: [resultEmbed],
+      components: [],
     });
 
-    collector.on('end', async (_collected, reason) => {
-      if (reason === 'time') {
-        const timeoutEmbed = new EmbedBuilder()
-          .setColor(CONFIG.COLORS.ERROR)
-          .setTitle('⏰ Wager Timed Out')
-          .setDescription('The wager request has expired.');
-
-        await wagerMessage.edit({ embeds: [timeoutEmbed], components: [] });
-      }
-    });
-
-    // Keep the command session active until the collector ends
-    await new Promise((resolve) => {
-      collector.on('end', resolve);
-    });
+    await commandSessionService.deleteSession('wager', messageId);
+    await commandSessionService.releaseExclusiveSession(session.challengerId, session.guildId);
   }
 }
 
