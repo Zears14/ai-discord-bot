@@ -87,6 +87,24 @@ class TransferCommand extends BaseCommand {
         const balance = await economy.getBalance(fromUserId, guildId);
         return message.reply(`You don't have enough Dih! Your balance: ${formatMoney(balance)} cm`);
       }
+      if (
+        error.message.includes('Transfers are disabled while you have an active loan') ||
+        error.message.includes('your loan is delinquent')
+      ) {
+        return message.reply(
+          'You cannot transfer while you have an active loan or delinquent debt. Repay it first with `loan pay`.'
+        );
+      }
+      if (
+        error.message.includes(
+          'Transfers to this user are disabled while they have an active loan'
+        ) ||
+        error.message.includes('Transfers to this user are disabled while their loan is delinquent')
+      ) {
+        return message.reply(
+          'You cannot transfer to that user while they have an active loan or delinquent debt.'
+        );
+      }
       return message.reply('An error occurred during the transfer. Please try again later.');
     }
   }

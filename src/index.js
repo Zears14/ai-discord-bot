@@ -13,6 +13,7 @@ import ItemHandler from './handlers/ItemHandler.js';
 import economyService from './services/economy.js';
 import inventoryService from './services/inventoryService.js';
 import logger from './services/loggerService.js';
+import { formatMoney } from './utils/moneyUtils.js';
 // Global error handler
 process.on('unhandledRejection', (error) => {
   logger.discord.error('Unhandled promise rejection:', error);
@@ -161,6 +162,75 @@ const commandHandler = new CommandHandler(client);
 client.commandHandler = commandHandler;
 const itemHandler = new ItemHandler();
 inventoryService.init(itemHandler);
+const LOAN_REMINDER_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+let loanReminderSweepInterval = null;
+let isLoanReminderSweepRunning = false;
+
+function buildLoanReminderMessage(reminder, serverName) {
+  if (reminder.type === 'near-due') {
+    const dueTimestamp = Math.floor(Number(reminder.dueAt) / 1000);
+    return [
+      `Loan reminder for **${serverName}**`,
+      `Your debt of **${formatMoney(reminder.debt)} cm** is almost due.`,
+      `Due: <t:${dueTimestamp}:F> (<t:${dueTimestamp}:R>)`,
+      'Use `$loan pay <amount|all>` to avoid delinquent debt lock.',
+    ].join('\n');
+  }
+
+  return [
+    `Loan overdue for **${serverName}**`,
+    `Your debt is now **${formatMoney(reminder.debt)} cm** and is delinquent.`,
+    'Transfers are disabled until the debt is cleared.',
+    'Use `$loan pay <amount|all>` to repay it.',
+  ].join('\n');
+}
+
+async function runLoanReminderSweep() {
+  if (isLoanReminderSweepRunning) {
+    return;
+  }
+
+  isLoanReminderSweepRunning = true;
+  try {
+    const candidates = await economyService.getLoanReminderCandidates();
+    for (const candidate of candidates) {
+      const reminderEvents = await economyService.consumeLoanReminderEvents(
+        candidate.userId,
+        candidate.guildId
+      );
+      if (!Array.isArray(reminderEvents) || reminderEvents.length === 0) {
+        continue;
+      }
+
+      const user =
+        client.users.cache.get(candidate.userId) ||
+        (await client.users.fetch(candidate.userId).catch(() => null));
+      if (!user) {
+        continue;
+      }
+
+      const serverName =
+        client.guilds.cache.get(candidate.guildId)?.name || `Server ${candidate.guildId}`;
+
+      for (const reminder of reminderEvents) {
+        try {
+          await user.send(buildLoanReminderMessage(reminder, serverName));
+        } catch (error) {
+          logger.discord.cmdError('Failed to send loan reminder DM from sweep:', {
+            userId: candidate.userId,
+            guildId: candidate.guildId,
+            reminderType: reminder?.type,
+            error,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    logger.discord.cmdError('Loan reminder sweep failed:', { error });
+  } finally {
+    isLoanReminderSweepRunning = false;
+  }
+}
 
 // Discord event handlers with optimized error handling
 client.once('clientReady', async () => {
@@ -179,6 +249,16 @@ client.once('clientReady', async () => {
 
     // Load items
     await itemHandler.loadItems();
+
+    // Sweep loan reminders periodically so DMs can be sent even without user commands
+    await runLoanReminderSweep();
+    if (!loanReminderSweepInterval) {
+      loanReminderSweepInterval = setInterval(() => {
+        runLoanReminderSweep().catch((error) => {
+          logger.discord.cmdError('Loan reminder sweep interval failed:', { error });
+        });
+      }, LOAN_REMINDER_SWEEP_INTERVAL_MS);
+    }
 
     logger.discord.ready('Bot is ready!');
   } catch (error) {
@@ -244,6 +324,11 @@ async function gracefulShutdown() {
   logger.discord.disconnect('Initiating graceful shutdown...');
 
   try {
+    if (loanReminderSweepInterval) {
+      clearInterval(loanReminderSweepInterval);
+      loanReminderSweepInterval = null;
+    }
+
     // Close Discord connection
     await client.destroy();
 

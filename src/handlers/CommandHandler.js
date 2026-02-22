@@ -10,9 +10,11 @@ import { Collection } from 'discord.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 import CONFIG from '../config/config.js';
+import economyService from '../services/economy.js';
 import levelService from '../services/levelService.js';
 import logger from '../services/loggerService.js';
 import ErrorHandler from '../utils/errorHandler.js';
+import { formatMoney } from '../utils/moneyUtils.js';
 
 // Cache for command files to prevent repeated disk reads
 const commandCache = new Map();
@@ -232,6 +234,66 @@ class CommandHandler {
     return patterns.some((pattern) => pattern.test(text));
   }
 
+  async notifyLoanReminders(message) {
+    if (!message?.guild || !message?.author) {
+      return;
+    }
+
+    let reminderEvents = [];
+    try {
+      reminderEvents = await economyService.consumeLoanReminderEvents(
+        message.author.id,
+        message.guild.id
+      );
+    } catch (error) {
+      logger.discord.cmdError('Failed to evaluate loan reminder state:', {
+        userId: message.author.id,
+        guildId: message.guild.id,
+        error,
+      });
+      return;
+    }
+
+    if (!Array.isArray(reminderEvents) || reminderEvents.length === 0) {
+      return;
+    }
+
+    const serverName = message.guild.name || 'Unknown Server';
+    for (const reminder of reminderEvents) {
+      try {
+        if (reminder.type === 'near-due') {
+          await message.author.send(
+            [
+              `Loan reminder for **${serverName}**`,
+              `Your debt of **${formatMoney(reminder.debt)} cm** is almost due.`,
+              `Due: <t:${Math.floor(Number(reminder.dueAt) / 1000)}:F> (<t:${Math.floor(Number(reminder.dueAt) / 1000)}:R>)`,
+              'Use `$loan pay <amount|all>` to avoid delinquent debt lock.',
+            ].join('\n')
+          );
+          continue;
+        }
+
+        if (reminder.type === 'overdue') {
+          await message.author.send(
+            [
+              `Loan overdue for **${serverName}**`,
+              `Your debt is now **${formatMoney(reminder.debt)} cm** and is delinquent.`,
+              'Transfers are disabled until the debt is cleared.',
+              'Use `$loan pay <amount|all>` to repay it.',
+            ].join('\n')
+          );
+        }
+      } catch (error) {
+        logger.discord.cmdError('Failed to send loan reminder DM:', {
+          userId: message.author.id,
+          guildId: message.guild.id,
+          reminderType: reminder?.type,
+          error,
+        });
+      }
+    }
+  }
+
   /**
    * Handles incoming messages and executes appropriate commands
    * @param {Message} message - Discord.js message object
@@ -268,6 +330,8 @@ class CommandHandler {
         );
       }
     }
+
+    await this.notifyLoanReminders(message);
 
     // Prevent concurrent command sessions per user
     const activeCommand = this.activeUserCommands.get(message.author.id);

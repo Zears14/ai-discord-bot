@@ -6,6 +6,34 @@ import inventoryService from '../services/inventoryService.js';
 import itemsService from '../services/itemsService.js';
 import { formatMoney, parsePositiveAmount, toBigInt } from '../utils/moneyUtils.js';
 
+const RUNSERIES_SEPARATOR_REGEX = /\s*;;\s*/;
+const MAX_SERIES_COMMANDS = 20;
+
+function parseRunSeriesCommands(rawInput) {
+  return rawInput
+    .split(RUNSERIES_SEPARATOR_REGEX)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function tokenizeSeriesCommand(commandText) {
+  const tokens = [];
+  const regex = /"[^"]*"|'[^']*'|\S+/g;
+  const matches = commandText.match(regex) || [];
+
+  for (const match of matches) {
+    const startsWithQuote = match.startsWith('"') || match.startsWith("'");
+    const endsWithQuote = match.endsWith('"') || match.endsWith("'");
+    if (startsWithQuote && endsWithQuote && match.length >= 2) {
+      tokens.push(match.slice(1, -1));
+    } else {
+      tokens.push(match);
+    }
+  }
+
+  return tokens;
+}
+
 class TestCommand extends BaseCommand {
   constructor(client) {
     // Only register the command if in development mode
@@ -52,6 +80,37 @@ class TestCommand extends BaseCommand {
             value:
               '`test resetgrowcooldown [@user]` - Reset grow cooldown (`resetcooldown`/`resetgrow` also work)',
             inline: true,
+          },
+          {
+            name: 'loanstatus',
+            value: '`test loanstatus [@user]` - View loan/debt status',
+            inline: true,
+          },
+          {
+            name: 'takeloan',
+            value: '`test takeloan @user <option_id|amount>` - Take a loan option',
+            inline: true,
+          },
+          {
+            name: 'payloan',
+            value: '`test payloan [@user] <amount|all>` - Pay loan from wallet+bank',
+            inline: true,
+          },
+          {
+            name: 'clearloan',
+            value: '`test clearloan [@user]` - Clear active/delinquent loan (dev)',
+            inline: true,
+          },
+          {
+            name: 'defaultloan',
+            value: '`test defaultloan [@user]` - Force immediate loan default',
+            inline: true,
+          },
+          {
+            name: 'runseries',
+            value:
+              '`test runseries <cmd1> ;; <cmd2> ;; ...` - Run multiple test commands concurrently',
+            inline: false,
           }
         )
         .setFooter({ text: 'Admin commands' })
@@ -228,6 +287,247 @@ class TestCommand extends BaseCommand {
             .setTitle('Available Items')
             .setDescription(allItems.map((item) => `**${item.name}** - ${item.title}`).join('\n'));
           await message.reply({ embeds: [embed] });
+          break;
+        }
+
+        case 'loanstatus': {
+          const targetUser = message.mentions.users.first() || message.author;
+          const [loanState, options] = await Promise.all([
+            economy.getLoanState(targetUser.id, guildId),
+            economy.getLoanOptions(),
+          ]);
+
+          const optionsText = options
+            .map(
+              (option) =>
+                `\`${option.id}\` => ${formatMoney(option.amount)} cm / ${option.durationDays}d / ${(Number(option.interestBps) / 100).toFixed(2)}%`
+            )
+            .join('\n');
+
+          const embed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🧪 Loan Status (Test)')
+            .setDescription(`Target: **${targetUser.username}**`)
+            .addFields(
+              {
+                name: 'Loan',
+                value: loanState.hasLoan
+                  ? [
+                      `Status: ${loanState.loan.status}`,
+                      `Debt: ${formatMoney(loanState.loan.debt)} cm`,
+                      `Principal: ${formatMoney(loanState.loan.principal)} cm`,
+                      `Due: ${loanState.loan.dueAt ? `<t:${Math.floor(loanState.loan.dueAt / 1000)}:F>` : 'N/A'}`,
+                      `Option: ${loanState.loan.optionId || 'N/A'}`,
+                    ].join('\n')
+                  : 'None',
+                inline: false,
+              },
+              {
+                name: 'Funds',
+                value: [
+                  `Wallet: ${formatMoney(loanState.walletBalance)} cm`,
+                  `Bank: ${formatMoney(loanState.bankBalance)} cm`,
+                  `Total: ${formatMoney(loanState.totalBalance)} cm`,
+                ].join('\n'),
+                inline: true,
+              },
+              {
+                name: 'Options',
+                value: optionsText || 'No loan options configured.',
+                inline: false,
+              }
+            )
+            .setTimestamp();
+
+          await message.reply({ embeds: [embed] });
+          break;
+        }
+
+        case 'takeloan': {
+          if (args.length < 3) {
+            return message.reply('Usage: `test takeloan @user <option_id|amount>`');
+          }
+
+          const targetUser = message.mentions.users.first();
+          if (!targetUser) {
+            return message.reply('Please mention a valid user.');
+          }
+
+          const optionToken = args[2].toLowerCase();
+          const options = await economy.getLoanOptions();
+          let selectedOption = options.find((option) => option.id === optionToken);
+          if (!selectedOption && /^\d+$/.test(optionToken)) {
+            const targetAmount = BigInt(optionToken);
+            selectedOption = options.find((option) => option.amount === targetAmount);
+          }
+
+          if (!selectedOption) {
+            return message.reply(
+              `Unknown loan option "${optionToken}". Use \`test loanstatus\` to list options.`
+            );
+          }
+
+          const result = await economy.takeLoan(targetUser.id, guildId, selectedOption.id);
+          const embed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.SUCCESS)
+            .setTitle('🧪 Loan Issued (Test)')
+            .setDescription(
+              `Issued **${formatMoney(selectedOption.amount)} cm** to **${targetUser.username}** via option \`${selectedOption.id}\`.`
+            )
+            .addFields(
+              { name: 'Debt', value: `${formatMoney(result.loan.debt)} cm`, inline: true },
+              {
+                name: 'Due',
+                value: result.loan.dueAt ? `<t:${Math.floor(result.loan.dueAt / 1000)}:R>` : 'N/A',
+                inline: true,
+              }
+            )
+            .setTimestamp();
+
+          await message.reply({ embeds: [embed] });
+          break;
+        }
+
+        case 'payloan': {
+          if (args.length < 2) {
+            return message.reply('Usage: `test payloan [@user] <amount|all>`');
+          }
+
+          const mentioned = message.mentions.users.first();
+          const targetUser = mentioned || message.author;
+          const amountArg = mentioned ? args[2] : args[1];
+          if (!amountArg) {
+            return message.reply('Usage: `test payloan [@user] <amount|all>`');
+          }
+
+          const token = amountArg.toLowerCase();
+          const amount = token === 'all' || token === 'max' ? null : parsePositiveAmount(amountArg);
+          const payment = await economy.payLoan(targetUser.id, guildId, amount);
+
+          const embed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.SUCCESS)
+            .setTitle('🧪 Loan Payment (Test)')
+            .setDescription(
+              `Paid **${formatMoney(payment.paid)} cm** for **${targetUser.username}**.`
+            )
+            .addFields(
+              {
+                name: 'Debt Remaining',
+                value: payment.hasLoan ? `${formatMoney(payment.loan.debt)} cm` : 'Paid off ✅',
+                inline: true,
+              },
+              { name: 'Wallet', value: `${formatMoney(payment.walletBalance)} cm`, inline: true },
+              { name: 'Bank', value: `${formatMoney(payment.bankBalance)} cm`, inline: true }
+            )
+            .setTimestamp();
+
+          await message.reply({ embeds: [embed] });
+          break;
+        }
+
+        case 'clearloan': {
+          const targetUser = message.mentions.users.first() || message.author;
+          const cleared = await economy.clearLoanForTesting(targetUser.id, guildId);
+          const embed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.SUCCESS)
+            .setTitle('🧪 Loan Cleared (Test)')
+            .setDescription(
+              `${targetUser.username}'s loan state has been cleared.\nPreviously had loan: **${cleared.hadLoan ? 'yes' : 'no'}**`
+            )
+            .setTimestamp();
+          await message.reply({ embeds: [embed] });
+          break;
+        }
+
+        case 'defaultloan': {
+          const targetUser = message.mentions.users.first() || message.author;
+          const result = await economy.forceLoanDefaultForTesting(targetUser.id, guildId);
+          const embed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.WARNING)
+            .setTitle('🧪 Loan Default Forced (Test)')
+            .setDescription(`Forced default for **${targetUser.username}**.`)
+            .addFields(
+              {
+                name: 'Penalty Added',
+                value: `${formatMoney(result.penaltyAdded ?? 0n)} cm`,
+                inline: true,
+              },
+              {
+                name: 'Seized On Default',
+                value: `${formatMoney(result.seizedOnDefault ?? 0n)} cm`,
+                inline: true,
+              },
+              {
+                name: 'Debt State',
+                value: result.hasLoan
+                  ? `${result.loan.status} (${formatMoney(result.loan.debt)} cm remaining)`
+                  : 'Cleared immediately',
+                inline: false,
+              }
+            )
+            .setTimestamp();
+          await message.reply({ embeds: [embed] });
+          break;
+        }
+
+        case 'runseries': {
+          const rawSeries = args.slice(1).join(' ').trim();
+          if (!rawSeries) {
+            return message.reply(
+              'Usage: `test runseries <cmd1> ;; <cmd2> ;; ...`\nExample: `test runseries balance ;; loanstatus @user ;; clearloan @user`'
+            );
+          }
+
+          const commands = parseRunSeriesCommands(rawSeries);
+          if (commands.length === 0) {
+            return message.reply('No commands found. Use `;;` to separate commands.');
+          }
+          if (commands.length > MAX_SERIES_COMMANDS) {
+            return message.reply(
+              `Too many commands in one series. Maximum is ${MAX_SERIES_COMMANDS}.`
+            );
+          }
+
+          const results = Array(commands.length).fill(null);
+          const runTasks = [];
+
+          for (let i = 0; i < commands.length; i++) {
+            const commandText = commands[i];
+            const commandArgs = tokenizeSeriesCommand(commandText);
+            const subcommand = (commandArgs[0] || '').toLowerCase();
+
+            if (!subcommand) {
+              results[i] = `❌ ${i + 1}. Empty command skipped`;
+              continue;
+            }
+
+            if (subcommand === 'runseries') {
+              results[i] = `❌ ${i + 1}. Nested runseries is not allowed`;
+              continue;
+            }
+
+            runTasks.push(
+              (async () => {
+                try {
+                  await this.execute(message, commandArgs);
+                  results[i] = `✅ ${i + 1}. ${commandText}`;
+                } catch (error) {
+                  results[i] = `❌ ${i + 1}. ${commandText} (${error.message})`;
+                }
+              })()
+            );
+          }
+
+          await Promise.all(runTasks);
+
+          const summaryEmbed = new EmbedBuilder()
+            .setColor(CONFIG.COLORS.DEFAULT)
+            .setTitle('🧪 Run Series Complete')
+            .setDescription(results.filter(Boolean).join('\n'))
+            .setFooter({ text: `${commands.length} command(s) dispatched concurrently` })
+            .setTimestamp();
+
+          await message.reply({ embeds: [summaryEmbed] });
           break;
         }
 

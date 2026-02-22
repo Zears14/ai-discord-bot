@@ -35,6 +35,18 @@ export default {
         LEVEL_BONUS_PER_LEVEL: 4, // +4 per level
       },
     },
+    LOANS: {
+      STATE_KEY: 'loanState',
+      OVERDUE_PENALTY_BPS: 1200, // +12% when loan becomes overdue
+      REMINDER_WINDOW_HOURS: 24, // notify users in DMs when a loan is close to due
+      OPTIONS: [
+        { id: 'micro', amount: 100, durationDays: 7, interestBps: 500 }, // 5%
+        { id: 'starter', amount: 500, durationDays: 7, interestBps: 650 }, // 6.5%
+        { id: 'standard', amount: 1000, durationDays: 7, interestBps: 800 }, // 8%
+        { id: 'advanced', amount: 5000, durationDays: 7, interestBps: 1100 }, // 11%
+        { id: 'highroller', amount: 10000, durationDays: 7, interestBps: 1400 }, // 14%
+      ],
+    },
     GROW_SCALING: {
       BASE_MIN: 8,
       BASE_MAX: 30,

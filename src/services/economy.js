@@ -66,6 +66,37 @@ const BANK_NOTE_LEVEL_BONUS_PER_LEVEL = toBigInt(
   CONFIG.ECONOMY.BANK?.BANK_NOTE?.LEVEL_BONUS_PER_LEVEL ?? 4,
   'Bank note level bonus'
 );
+const LOAN_STATE_KEY = CONFIG.ECONOMY.LOANS?.STATE_KEY ?? 'loanState';
+const LOAN_OVERDUE_PENALTY_BPS = Math.max(
+  0,
+  Math.floor(Number(CONFIG.ECONOMY.LOANS?.OVERDUE_PENALTY_BPS ?? 1200))
+);
+const LOAN_REMINDER_WINDOW_HOURS = Math.max(
+  1,
+  Math.floor(Number(CONFIG.ECONOMY.LOANS?.REMINDER_WINDOW_HOURS ?? 24))
+);
+const LOAN_REMINDER_WINDOW_MS = LOAN_REMINDER_WINDOW_HOURS * 60 * 60 * 1000;
+const LOAN_OPTIONS = Array.isArray(CONFIG.ECONOMY.LOANS?.OPTIONS)
+  ? CONFIG.ECONOMY.LOANS.OPTIONS.map((option, index) => {
+      const id = typeof option?.id === 'string' ? option.id.trim().toLowerCase() : '';
+      if (!id) return null;
+      const amount = toBigInt(option.amount ?? 0, `Loan option ${id} amount`);
+      const durationDays = Math.max(1, Math.floor(Number(option.durationDays ?? 7)));
+      const interestBps = Math.max(0, Math.floor(Number(option.interestBps ?? 0)));
+      return {
+        id,
+        amount,
+        durationDays,
+        interestBps,
+        label:
+          typeof option?.label === 'string' && option.label.trim().length > 0
+            ? option.label.trim()
+            : `${amount.toString()} cm for ${durationDays}d`,
+        order: index,
+      };
+    }).filter(Boolean)
+  : [];
+const LOAN_OPTIONS_BY_ID = new Map(LOAN_OPTIONS.map((option) => [option.id, option]));
 
 /**
  * Cache utilities
@@ -159,6 +190,287 @@ async function safeQuery(query, params = [], retries = 3) {
   }
 }
 
+function asPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function getLoanOptionById(optionId) {
+  if (typeof optionId !== 'string') return null;
+  return LOAN_OPTIONS_BY_ID.get(optionId.trim().toLowerCase()) || null;
+}
+
+function getLoanOptions() {
+  return LOAN_OPTIONS.map((option) => ({ ...option }));
+}
+
+async function getLoanReminderCandidates(limit = 500) {
+  const parsedLimit = Math.max(1, Math.min(5000, Math.floor(Number(limit) || 500)));
+  const result = await safeQuery(
+    `SELECT userid, guildid
+       FROM economy
+       WHERE data ? $1
+       ORDER BY guildid, userid
+       LIMIT $2`,
+    [LOAN_STATE_KEY, parsedLimit]
+  );
+
+  return result.rows.map((row) => ({
+    userId: row.userid,
+    guildId: row.guildid,
+  }));
+}
+
+function parseLoanState(rawLoanState) {
+  const raw = asPlainObject(rawLoanState);
+  if (!Object.keys(raw).length) {
+    return null;
+  }
+
+  const status =
+    raw.status === 'active' || raw.status === 'delinquent'
+      ? raw.status
+      : raw.delinquent
+        ? 'delinquent'
+        : null;
+  if (!status) {
+    return null;
+  }
+
+  const debt = toBigInt(raw.debt ?? raw.totalDue ?? 0, 'Loan debt');
+  if (debt <= 0n) {
+    return null;
+  }
+
+  const principal = toBigInt(raw.principal ?? 0, 'Loan principal');
+  const dueAt = Math.max(0, Math.floor(Number(raw.dueAt ?? 0)));
+  const interestBps = Math.max(0, Math.floor(Number(raw.interestBps ?? 0)));
+  const overduePenaltyBps = Math.max(
+    0,
+    Math.floor(Number(raw.overduePenaltyBps ?? LOAN_OVERDUE_PENALTY_BPS))
+  );
+  const takenAt = Math.max(0, Math.floor(Number(raw.takenAt ?? 0)));
+  const defaultedAt = Math.max(0, Math.floor(Number(raw.defaultedAt ?? 0)));
+  const nearDueNotifiedAt = Math.max(0, Math.floor(Number(raw.nearDueNotifiedAt ?? 0)));
+  const overdueNotifiedAt = Math.max(0, Math.floor(Number(raw.overdueNotifiedAt ?? 0)));
+  const optionId =
+    typeof raw.optionId === 'string' && raw.optionId.trim().length > 0
+      ? raw.optionId.trim().toLowerCase()
+      : null;
+
+  return {
+    status,
+    debt,
+    principal,
+    dueAt,
+    interestBps,
+    overduePenaltyBps,
+    takenAt,
+    defaultedAt: defaultedAt > 0 ? defaultedAt : null,
+    nearDueNotifiedAt: nearDueNotifiedAt > 0 ? nearDueNotifiedAt : null,
+    overdueNotifiedAt: overdueNotifiedAt > 0 ? overdueNotifiedAt : null,
+    optionId,
+  };
+}
+
+function serializeLoanState(loanState) {
+  if (!loanState) {
+    return null;
+  }
+
+  return {
+    status: loanState.status,
+    debt: toBigInt(loanState.debt, 'Loan debt').toString(),
+    principal: toBigInt(loanState.principal ?? 0, 'Loan principal').toString(),
+    dueAt: loanState.dueAt ?? 0,
+    interestBps: loanState.interestBps ?? 0,
+    overduePenaltyBps: loanState.overduePenaltyBps ?? LOAN_OVERDUE_PENALTY_BPS,
+    takenAt: loanState.takenAt ?? 0,
+    defaultedAt: loanState.defaultedAt ?? null,
+    nearDueNotifiedAt: loanState.nearDueNotifiedAt ?? null,
+    overdueNotifiedAt: loanState.overdueNotifiedAt ?? null,
+    optionId: loanState.optionId ?? null,
+  };
+}
+
+function applyFundsToDebt(walletBalance, bankBalance, debt) {
+  let wallet = toBigInt(walletBalance, 'Wallet balance');
+  let bank = toBigInt(bankBalance, 'Bank balance');
+  let remainingDebt = toBigInt(debt, 'Debt');
+  let paid = 0n;
+
+  if (remainingDebt <= 0n) {
+    return { wallet, bank, paid: 0n, remainingDebt: 0n };
+  }
+
+  if (wallet > 0n) {
+    const fromWallet = wallet < remainingDebt ? wallet : remainingDebt;
+    wallet -= fromWallet;
+    remainingDebt -= fromWallet;
+    paid += fromWallet;
+  }
+
+  if (remainingDebt > 0n && bank > 0n) {
+    const fromBank = bank < remainingDebt ? bank : remainingDebt;
+    bank -= fromBank;
+    remainingDebt -= fromBank;
+    paid += fromBank;
+  }
+
+  return { wallet, bank, paid, remainingDebt };
+}
+
+function buildDataPayload(baseData, bankBalance, bankMax, loanState) {
+  const payload = {
+    ...asPlainObject(baseData),
+    [BANK_BALANCE_KEY]: toBigInt(bankBalance, 'Bank balance').toString(),
+    [BANK_MAX_KEY]: toBigInt(bankMax, 'Bank max').toString(),
+  };
+
+  if (loanState) {
+    payload[LOAN_STATE_KEY] = serializeLoanState(loanState);
+  } else {
+    delete payload[LOAN_STATE_KEY];
+  }
+
+  return payload;
+}
+
+async function persistEconomyState(
+  client,
+  userId,
+  guildId,
+  walletBalance,
+  bankBalance,
+  bankMax,
+  loanState,
+  baseData
+) {
+  const updatedData = buildDataPayload(baseData, bankBalance, bankMax, loanState);
+  await client.query(
+    `UPDATE economy
+         SET balance = $3,
+             data = $4::jsonb,
+             lastgrow = COALESCE(lastgrow, $5)
+         WHERE userid = $1 AND guildid = $2`,
+    [userId, guildId, walletBalance, updatedData, new Date(0)]
+  );
+  return updatedData;
+}
+
+function normalizeLoanStateForRow(row, nowMs = Date.now()) {
+  let walletBalance = toBigInt(row?.balance ?? DEFAULT_BALANCE, 'Wallet balance');
+  let { bankBalance, bankMax } = parseBankValues(row);
+  const baseData = asPlainObject(row?.data);
+  let loanState = parseLoanState(baseData[LOAN_STATE_KEY]);
+  let changed = false;
+  let defaultedNow = false;
+  let seizedOnDefault = 0n;
+  let penaltyAdded = 0n;
+
+  if (
+    loanState &&
+    loanState.status === 'active' &&
+    loanState.dueAt > 0 &&
+    nowMs > loanState.dueAt
+  ) {
+    defaultedNow = true;
+    const penalty = (loanState.debt * BigInt(loanState.overduePenaltyBps)) / 10000n;
+    penaltyAdded = penalty;
+    loanState = {
+      ...loanState,
+      status: 'delinquent',
+      defaultedAt: nowMs,
+      debt: loanState.debt + penalty,
+    };
+    changed = true;
+
+    const settlement = applyFundsToDebt(walletBalance, bankBalance, loanState.debt);
+    walletBalance = settlement.wallet;
+    bankBalance = settlement.bank;
+    loanState.debt = settlement.remainingDebt;
+    seizedOnDefault = settlement.paid;
+    changed = true;
+  }
+
+  if (loanState && loanState.debt <= 0n) {
+    loanState = null;
+    changed = true;
+  }
+
+  return {
+    walletBalance,
+    bankBalance,
+    bankMax,
+    loanState,
+    changed,
+    defaultedNow,
+    seizedOnDefault,
+    penaltyAdded,
+  };
+}
+
+function ensureTransferAllowedForLoanState(loanState, direction) {
+  if (!loanState) {
+    return;
+  }
+
+  if (loanState.status === 'active') {
+    throw new Error(
+      direction === 'sender'
+        ? 'Transfers are disabled while you have an active loan.'
+        : 'Transfers to this user are disabled while they have an active loan.'
+    );
+  }
+
+  if (loanState.status === 'delinquent') {
+    throw new Error(
+      direction === 'sender'
+        ? 'Transfers are disabled while your loan is delinquent.'
+        : 'Transfers to this user are disabled while their loan is delinquent.'
+    );
+  }
+}
+
+async function addLoanNormalizationHistory(client, userId, guildId, normalized) {
+  if (!normalized?.defaultedNow) {
+    return;
+  }
+
+  await historyService.addHistory(
+    {
+      userid: userId,
+      guildid: guildId,
+      type: 'loan-default',
+      amount: 0n,
+    },
+    client
+  );
+
+  if (normalized.penaltyAdded > 0n) {
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-overdue-penalty',
+        amount: normalized.penaltyAdded,
+      },
+      client
+    );
+  }
+
+  if (normalized.seizedOnDefault > 0n) {
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-default-seizure',
+        amount: -normalized.seizedOnDefault,
+      },
+      client
+    );
+  }
+}
+
 function parseBankValues(row) {
   const bankBalance = toBigInt(row?.bank_balance ?? 0, 'Bank balance');
   let bankMax = toBigInt(row?.bank_max ?? BANK_DEFAULT_MAX, 'Bank max');
@@ -184,6 +496,7 @@ function calculateBankNoteIncrease(currentMax, level) {
 async function getOrCreateLockedEconomyRow(client, userId, guildId) {
   let row = await client.query(
     `SELECT balance,
+              COALESCE(data, '{}'::jsonb) as data,
               COALESCE(data->>$3, '0') as bank_balance,
               COALESCE(data->>$4, $5) as bank_max
          FROM economy
@@ -214,6 +527,26 @@ async function getOrCreateLockedEconomyRow(client, userId, guildId) {
 
   row = await client.query(
     `SELECT balance,
+              COALESCE(data, '{}'::jsonb) as data,
+              COALESCE(data->>$3, '0') as bank_balance,
+              COALESCE(data->>$4, $5) as bank_max
+         FROM economy
+         WHERE userid = $1 AND guildid = $2
+         FOR UPDATE`,
+    [userId, guildId, BANK_BALANCE_KEY, BANK_MAX_KEY, BANK_DEFAULT_MAX.toString()]
+  );
+
+  if (row.rowCount > 0) {
+    return row.rows[0];
+  }
+
+  throw new Error('Failed to initialize user economy row');
+}
+
+async function getLockedEconomyRowIfExists(client, userId, guildId) {
+  const row = await client.query(
+    `SELECT balance,
+              COALESCE(data, '{}'::jsonb) as data,
               COALESCE(data->>$3, '0') as bank_balance,
               COALESCE(data->>$4, $5) as bank_max
          FROM economy
@@ -223,38 +556,10 @@ async function getOrCreateLockedEconomyRow(client, userId, guildId) {
   );
 
   if (row.rowCount === 0) {
-    throw new Error('Failed to initialize user economy row');
+    return null;
   }
 
   return row.rows[0];
-}
-
-async function persistBankState(client, userId, guildId, walletBalance, bankBalance, bankMax) {
-  await client.query(
-    `UPDATE economy
-         SET balance = $3,
-             data = jsonb_set(
-               jsonb_set(
-                 COALESCE(data, '{}'::jsonb),
-                 ARRAY[$4]::text[],
-                 to_jsonb($5::text),
-                 true
-               ),
-               ARRAY[$6]::text[],
-               to_jsonb($7::text),
-               true
-             )
-         WHERE userid = $1 AND guildid = $2`,
-    [
-      userId,
-      guildId,
-      walletBalance,
-      BANK_BALANCE_KEY,
-      bankBalance.toString(),
-      BANK_MAX_KEY,
-      bankMax.toString(),
-    ]
-  );
 }
 
 /**
@@ -589,13 +894,31 @@ async function createUser(userId, guildId) {
  * Get user's balance (backward compatible)
  */
 async function getBalance(userId, guildId) {
-  try {
-    const userData = await getUserData(userId, guildId);
-    return userData.balance;
-  } catch (error) {
-    logger.discord.dbError(`Error getting balance for ${userId}:${guildId}:`, error);
-    throw error;
-  }
+  return withTransaction(async (client) => {
+    try {
+      const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+      const normalized = normalizeLoanStateForRow(row);
+
+      if (normalized.changed) {
+        await persistEconomyState(
+          client,
+          userId,
+          guildId,
+          normalized.walletBalance,
+          normalized.bankBalance,
+          normalized.bankMax,
+          normalized.loanState,
+          row.data
+        );
+      }
+
+      invalidateCache(userId, guildId);
+      return normalized.walletBalance;
+    } catch (error) {
+      logger.discord.dbError(`Error getting balance for ${userId}:${guildId}:`, error);
+      throw error;
+    }
+  });
 }
 
 /**
@@ -606,60 +929,64 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
 
   return withTransaction(async (client) => {
     try {
-      // Lock and fetch current data (using lowercase column names)
-      const res = await client.query(
-        `SELECT balance FROM economy 
-                 WHERE userid = $1 AND guildid = $2 
-                 FOR UPDATE`,
-        [userId, guildId]
-      );
+      const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+      const previousBalance = toBigInt(row.balance ?? DEFAULT_BALANCE, 'Previous balance');
+      const normalized = normalizeLoanStateForRow(row);
 
-      let newBalance;
-      let isNewUser = false;
-      const minBalance = MIN_BALANCE;
+      let newBalance = normalized.walletBalance;
+      let bankBalance = normalized.bankBalance;
+      const bankMax = normalized.bankMax;
+      let loanState = normalized.loanState;
+      let redirectedToDebt = 0n;
+      let debtIncreasedBy = 0n;
 
-      if (res.rowCount === 0) {
-        // Create new user and apply change
-        newBalance = DEFAULT_BALANCE + parsedAmount;
-        ensurePgBigIntRange(newBalance, 'Resulting balance');
-        if (newBalance < minBalance) {
-          throw new Error(
-            'Transaction would violate minimum balance. ' +
-              `Current: ${DEFAULT_BALANCE}, Change: ${parsedAmount}, ` +
-              `Resulting: ${newBalance}, Minimum: ${minBalance}`
-          );
+      if (loanState?.status === 'delinquent') {
+        if (parsedAmount > 0n) {
+          redirectedToDebt = parsedAmount < loanState.debt ? parsedAmount : loanState.debt;
+          loanState = {
+            ...loanState,
+            debt: loanState.debt - redirectedToDebt,
+          };
+          newBalance += parsedAmount - redirectedToDebt;
+        } else if (parsedAmount < 0n) {
+          debtIncreasedBy = -parsedAmount;
+          loanState = {
+            ...loanState,
+            debt: loanState.debt + debtIncreasedBy,
+          };
         }
-
-        await client.query(
-          `INSERT INTO economy (userid, guildid, balance, lastgrow)
-                     VALUES ($1, $2, $3, $4)`,
-          [userId, guildId, newBalance, new Date(0)]
-        );
-        isNewUser = true;
       } else {
-        // Update existing user - ensure balance doesn't go negative
-        const currentBalance = toBigInt(res.rows[0].balance, 'Current balance');
-        const proposedBalance = currentBalance + parsedAmount;
+        const proposedBalance = newBalance + parsedAmount;
         ensurePgBigIntRange(proposedBalance, 'Resulting balance');
 
-        // Check if the operation would violate minimum balance
-        if (proposedBalance < minBalance) {
+        if (proposedBalance < MIN_BALANCE) {
           throw new Error(
             'Transaction would violate minimum balance. ' +
-              `Current: ${currentBalance}, Change: ${parsedAmount}, ` +
-              `Resulting: ${proposedBalance}, Minimum: ${minBalance}`
+              `Current: ${newBalance}, Change: ${parsedAmount}, ` +
+              `Resulting: ${proposedBalance}, Minimum: ${MIN_BALANCE}`
           );
         }
 
         newBalance = proposedBalance;
-
-        await client.query(
-          `UPDATE economy 
-                     SET balance = $3, lastgrow = COALESCE(lastgrow, $4)
-                     WHERE userid = $1 AND guildid = $2`,
-          [userId, guildId, newBalance, new Date(0)]
-        );
       }
+
+      if (loanState && loanState.debt <= 0n) {
+        loanState = null;
+      }
+
+      ensurePgBigIntRange(newBalance, 'Resulting wallet balance');
+      ensurePgBigIntRange(bankBalance, 'Resulting bank balance');
+
+      await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        newBalance,
+        bankBalance,
+        bankMax,
+        loanState,
+        row.data
+      );
 
       // Log transaction for audit trail
       logger.discord.db(
@@ -677,6 +1004,32 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
         client
       );
 
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+
+      if (redirectedToDebt > 0n) {
+        await historyService.addHistory(
+          {
+            userid: userId,
+            guildid: guildId,
+            type: 'loan-debt-payment',
+            amount: redirectedToDebt,
+          },
+          client
+        );
+      }
+
+      if (debtIncreasedBy > 0n) {
+        await historyService.addHistory(
+          {
+            userid: userId,
+            guildid: guildId,
+            type: 'loan-delinquent-loss',
+            amount: debtIncreasedBy,
+          },
+          client
+        );
+      }
+
       // Invalidate cache
       invalidateCache(userId, guildId);
 
@@ -684,7 +1037,7 @@ async function updateBalance(userId, guildId, amount, reason = 'update') {
         userId,
         guildId,
         balance: newBalance,
-        previousBalance: isNewUser ? DEFAULT_BALANCE : toBigInt(res.rows[0]?.balance ?? 0n),
+        previousBalance,
         amount: parsedAmount,
         reason,
       };
@@ -888,57 +1241,78 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
   }
 
   return withTransaction(async (client) => {
-    // Lock both users
-    const fromRes = await client.query(
-      `SELECT balance FROM economy 
-             WHERE userid = $1 AND guildid = $2 
-             FOR UPDATE`,
-      [fromUserId, guildId]
-    );
+    const fromRow = await getOrCreateLockedEconomyRow(client, fromUserId, guildId);
+    const toRow = await getOrCreateLockedEconomyRow(client, toUserId, guildId);
 
-    if (fromRes.rowCount === 0) {
-      throw new Error('Sender not found');
+    const fromNormalized = normalizeLoanStateForRow(fromRow);
+    const toNormalized = normalizeLoanStateForRow(toRow);
+
+    let fromData = fromRow.data;
+    let toData = toRow.data;
+
+    if (fromNormalized.changed) {
+      fromData = await persistEconomyState(
+        client,
+        fromUserId,
+        guildId,
+        fromNormalized.walletBalance,
+        fromNormalized.bankBalance,
+        fromNormalized.bankMax,
+        fromNormalized.loanState,
+        fromData
+      );
+      await addLoanNormalizationHistory(client, fromUserId, guildId, fromNormalized);
     }
 
-    const fromBalance = toBigInt(fromRes.rows[0].balance, 'Sender balance');
+    if (toNormalized.changed) {
+      toData = await persistEconomyState(
+        client,
+        toUserId,
+        guildId,
+        toNormalized.walletBalance,
+        toNormalized.bankBalance,
+        toNormalized.bankMax,
+        toNormalized.loanState,
+        toData
+      );
+      await addLoanNormalizationHistory(client, toUserId, guildId, toNormalized);
+    }
+
+    ensureTransferAllowedForLoanState(fromNormalized.loanState, 'sender');
+    ensureTransferAllowedForLoanState(toNormalized.loanState, 'recipient');
+
+    const fromBalance = fromNormalized.walletBalance;
     if (fromBalance < parsedAmount) {
       throw new Error(`Insufficient balance: ${fromBalance} < ${parsedAmount}`);
     }
 
-    // Ensure recipient exists
-    await client.query(
-      `INSERT INTO economy (userid, guildid, balance, lastgrow)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (userid, guildid) DO NOTHING`,
-      [toUserId, guildId, DEFAULT_BALANCE, new Date(0)]
-    );
-
-    // Lock recipient
-    const toRes = await client.query(
-      `SELECT balance FROM economy 
-             WHERE userid = $1 AND guildid = $2 
-             FOR UPDATE`,
-      [toUserId, guildId]
-    );
-
-    const toBalance = toBigInt(toRes.rows[0].balance, 'Recipient balance');
+    const toBalance = toNormalized.walletBalance;
     const fromNewBalance = fromBalance - parsedAmount;
     const toNewBalance = toBalance + parsedAmount;
     ensurePgBigIntRange(fromNewBalance, 'Sender resulting balance');
     ensurePgBigIntRange(toNewBalance, 'Recipient resulting balance');
 
-    // Update balances
-    await client.query('UPDATE economy SET balance = $3 WHERE userid = $1 AND guildid = $2', [
+    await persistEconomyState(
+      client,
       fromUserId,
       guildId,
       fromNewBalance,
-    ]);
+      fromNormalized.bankBalance,
+      fromNormalized.bankMax,
+      fromNormalized.loanState,
+      fromData
+    );
 
-    await client.query('UPDATE economy SET balance = $3 WHERE userid = $1 AND guildid = $2', [
+    await persistEconomyState(
+      client,
       toUserId,
       guildId,
       toNewBalance,
-    ]);
+      toNormalized.bankBalance,
+      toNormalized.bankMax,
+      toNormalized.loanState,
+      toData
+    );
 
     // Invalidate caches
     invalidateCache(fromUserId, guildId);
@@ -981,28 +1355,31 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
  * Get wallet + bank balances and capacity.
  */
 async function getBankData(userId, guildId) {
-  await getUserData(userId, guildId);
-  const res = await safeQuery(
-    `SELECT balance,
-            COALESCE(data->>$3, '0') as bank_balance,
-            COALESCE(data->>$4, $5) as bank_max
-       FROM economy
-       WHERE userid = $1 AND guildid = $2`,
-    [userId, guildId, BANK_BALANCE_KEY, BANK_MAX_KEY, BANK_DEFAULT_MAX.toString()]
-  );
+  const snapshot = await withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
 
-  if (res.rowCount === 0) {
-    return {
-      walletBalance: DEFAULT_BALANCE,
-      bankBalance: 0n,
-      bankMax: BANK_DEFAULT_MAX,
-      availableSpace: BANK_DEFAULT_MAX,
-      totalBalance: DEFAULT_BALANCE,
-    };
-  }
+    if (normalized.changed) {
+      await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        row.data
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
 
-  const walletBalance = toBigInt(res.rows[0].balance ?? 0n, 'Wallet balance');
-  const { bankBalance, bankMax } = parseBankValues(res.rows[0]);
+    return normalized;
+  });
+
+  invalidateCache(userId, guildId);
+  const walletBalance = snapshot.walletBalance;
+  const bankBalance = snapshot.bankBalance;
+  const bankMax = snapshot.bankMax;
   const availableSpace = bankMax > bankBalance ? bankMax - bankBalance : 0n;
 
   return {
@@ -1022,8 +1399,30 @@ async function depositToBank(userId, guildId, amount) {
 
   return withTransaction(async (client) => {
     const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
-    const walletBalance = toBigInt(row.balance ?? 0n, 'Wallet balance');
-    const { bankBalance, bankMax } = parseBankValues(row);
+    const normalized = normalizeLoanStateForRow(row);
+    let rowData = row.data;
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    if (normalized.loanState?.status === 'delinquent') {
+      throw new Error('Bank transfers are disabled while your loan is delinquent.');
+    }
+
+    const walletBalance = normalized.walletBalance;
+    const bankBalance = normalized.bankBalance;
+    const bankMax = normalized.bankMax;
     const availableSpace = bankMax > bankBalance ? bankMax - bankBalance : 0n;
 
     if (walletBalance < parsedAmount) {
@@ -1050,7 +1449,16 @@ async function depositToBank(userId, guildId, amount) {
     ensurePgBigIntRange(newWalletBalance, 'Wallet balance after deposit');
     ensurePgBigIntRange(newBankBalance, 'Bank balance after deposit');
 
-    await persistBankState(client, userId, guildId, newWalletBalance, newBankBalance, bankMax);
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      newWalletBalance,
+      newBankBalance,
+      bankMax,
+      normalized.loanState,
+      rowData
+    );
 
     await historyService.addHistory(
       {
@@ -1082,8 +1490,30 @@ async function withdrawFromBank(userId, guildId, amount) {
 
   return withTransaction(async (client) => {
     const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
-    const walletBalance = toBigInt(row.balance ?? 0n, 'Wallet balance');
-    const { bankBalance, bankMax } = parseBankValues(row);
+    const normalized = normalizeLoanStateForRow(row);
+    let rowData = row.data;
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    if (normalized.loanState?.status === 'delinquent') {
+      throw new Error('Bank transfers are disabled while your loan is delinquent.');
+    }
+
+    const walletBalance = normalized.walletBalance;
+    const bankBalance = normalized.bankBalance;
+    const bankMax = normalized.bankMax;
 
     if (bankBalance < parsedAmount) {
       throw new Error(
@@ -1096,7 +1526,16 @@ async function withdrawFromBank(userId, guildId, amount) {
     ensurePgBigIntRange(newWalletBalance, 'Wallet balance after withdrawal');
     ensurePgBigIntRange(newBankBalance, 'Bank balance after withdrawal');
 
-    await persistBankState(client, userId, guildId, newWalletBalance, newBankBalance, bankMax);
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      newWalletBalance,
+      newBankBalance,
+      bankMax,
+      normalized.loanState,
+      rowData
+    );
 
     await historyService.addHistory(
       {
@@ -1129,8 +1568,26 @@ async function expandBankCapacity(userId, guildId, quantity = 1, level = 1) {
 
   return withTransaction(async (client) => {
     const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
-    const walletBalance = toBigInt(row.balance ?? 0n, 'Wallet balance');
-    const { bankBalance, bankMax: initialBankMax } = parseBankValues(row);
+    const normalized = normalizeLoanStateForRow(row);
+    let rowData = row.data;
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    const walletBalance = normalized.walletBalance;
+    const bankBalance = normalized.bankBalance;
+    const initialBankMax = normalized.bankMax;
     let bankMax = initialBankMax;
 
     let totalIncrease = 0n;
@@ -1144,7 +1601,16 @@ async function expandBankCapacity(userId, guildId, quantity = 1, level = 1) {
 
     ensurePgBigIntRange(bankMax, 'Bank max after upgrade');
 
-    await persistBankState(client, userId, guildId, walletBalance, bankBalance, bankMax);
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      walletBalance,
+      bankBalance,
+      bankMax,
+      normalized.loanState,
+      rowData
+    );
 
     await historyService.addHistory(
       {
@@ -1165,6 +1631,444 @@ async function expandBankCapacity(userId, guildId, quantity = 1, level = 1) {
       bankBalance,
       availableSpace: bankMax > bankBalance ? bankMax - bankBalance : 0n,
       level: parsedLevel,
+    };
+  });
+}
+
+function buildLoanSnapshot(loanState, walletBalance, bankBalance, bankMax) {
+  const totalBalance = walletBalance + bankBalance;
+  if (!loanState) {
+    return {
+      hasLoan: false,
+      loan: null,
+      walletBalance,
+      bankBalance,
+      bankMax,
+      totalBalance,
+    };
+  }
+
+  return {
+    hasLoan: true,
+    loan: {
+      status: loanState.status,
+      debt: loanState.debt,
+      principal: loanState.principal,
+      dueAt: loanState.dueAt || null,
+      interestBps: loanState.interestBps,
+      overduePenaltyBps: loanState.overduePenaltyBps,
+      takenAt: loanState.takenAt || null,
+      defaultedAt: loanState.defaultedAt || null,
+      optionId: loanState.optionId,
+    },
+    walletBalance,
+    bankBalance,
+    bankMax,
+    totalBalance,
+  };
+}
+
+async function getLoanState(userId, guildId) {
+  const snapshot = await withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+
+    if (normalized.changed) {
+      await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        row.data
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    return buildLoanSnapshot(
+      normalized.loanState,
+      normalized.walletBalance,
+      normalized.bankBalance,
+      normalized.bankMax
+    );
+  });
+
+  invalidateCache(userId, guildId);
+  return snapshot;
+}
+
+async function consumeLoanReminderEvents(userId, guildId, nowMs = Date.now()) {
+  return withTransaction(async (client) => {
+    const row = await getLockedEconomyRowIfExists(client, userId, guildId);
+    if (!row) {
+      return [];
+    }
+
+    const normalized = normalizeLoanStateForRow(row, nowMs);
+    let rowData = row.data;
+    let loanState = normalized.loanState;
+    const reminderEvents = [];
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    if (loanState?.status === 'active' && loanState.dueAt > nowMs) {
+      const remainingMs = loanState.dueAt - nowMs;
+      if (remainingMs <= LOAN_REMINDER_WINDOW_MS && !loanState.nearDueNotifiedAt) {
+        reminderEvents.push({
+          type: 'near-due',
+          debt: loanState.debt,
+          dueAt: loanState.dueAt,
+          remainingMs,
+        });
+        loanState = {
+          ...loanState,
+          nearDueNotifiedAt: nowMs,
+        };
+      }
+    }
+
+    if (loanState?.status === 'delinquent' && !loanState.overdueNotifiedAt) {
+      reminderEvents.push({
+        type: 'overdue',
+        debt: loanState.debt,
+        dueAt: loanState.dueAt || null,
+        defaultedAt: loanState.defaultedAt || nowMs,
+      });
+      loanState = {
+        ...loanState,
+        overdueNotifiedAt: nowMs,
+      };
+    }
+
+    if (loanState && loanState.debt <= 0n) {
+      loanState = null;
+    }
+
+    if (loanState !== normalized.loanState) {
+      await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        loanState,
+        rowData
+      );
+    }
+
+    invalidateCache(userId, guildId);
+    return reminderEvents;
+  });
+}
+
+async function takeLoan(userId, guildId, optionId) {
+  const option = getLoanOptionById(optionId);
+  if (!option) {
+    throw new Error('Invalid loan option.');
+  }
+
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+    let rowData = row.data;
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    if (normalized.loanState) {
+      throw new Error('You already have an active loan or delinquent debt.');
+    }
+
+    const now = Date.now();
+    const durationMs = option.durationDays * 24 * 60 * 60 * 1000;
+    const interest = (option.amount * BigInt(option.interestBps)) / 10000n;
+    const debt = option.amount + interest;
+    const newWalletBalance = normalized.walletBalance + option.amount;
+    ensurePgBigIntRange(newWalletBalance, 'Wallet balance after loan');
+
+    const loanState = {
+      status: 'active',
+      debt,
+      principal: option.amount,
+      dueAt: now + durationMs,
+      interestBps: option.interestBps,
+      overduePenaltyBps: LOAN_OVERDUE_PENALTY_BPS,
+      takenAt: now,
+      defaultedAt: null,
+      nearDueNotifiedAt: null,
+      overdueNotifiedAt: null,
+      optionId: option.id,
+    };
+
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      newWalletBalance,
+      normalized.bankBalance,
+      normalized.bankMax,
+      loanState,
+      rowData
+    );
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-taken',
+        amount: option.amount,
+      },
+      client
+    );
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-created-debt',
+        amount: debt,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return buildLoanSnapshot(
+      loanState,
+      newWalletBalance,
+      normalized.bankBalance,
+      normalized.bankMax
+    );
+  });
+}
+
+async function payLoan(userId, guildId, amount = null) {
+  const parsedAmount = amount === null ? null : parsePositiveAmount(amount, 'Loan payment amount');
+
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+    let rowData = row.data;
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    if (!normalized.loanState) {
+      throw new Error('You have no active loan or debt.');
+    }
+
+    const availableFunds = normalized.walletBalance + normalized.bankBalance;
+    if (availableFunds <= 0n) {
+      throw new Error('You have no available funds in wallet/bank to pay this debt.');
+    }
+
+    const requested = parsedAmount ?? availableFunds;
+    const targetPayment =
+      requested < normalized.loanState.debt ? requested : normalized.loanState.debt;
+    const payment = targetPayment < availableFunds ? targetPayment : availableFunds;
+
+    if (payment <= 0n) {
+      throw new Error('Payment amount must be greater than zero.');
+    }
+
+    const settlement = applyFundsToDebt(normalized.walletBalance, normalized.bankBalance, payment);
+    let loanState = {
+      ...normalized.loanState,
+      debt: normalized.loanState.debt - payment,
+    };
+
+    if (loanState.debt <= 0n) {
+      loanState = null;
+    }
+
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      settlement.wallet,
+      settlement.bank,
+      normalized.bankMax,
+      loanState,
+      rowData
+    );
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-payment',
+        amount: payment,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return {
+      paid: payment,
+      ...buildLoanSnapshot(loanState, settlement.wallet, settlement.bank, normalized.bankMax),
+    };
+  });
+}
+
+async function clearLoanForTesting(userId, guildId) {
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+    const hadLoan = Boolean(normalized.loanState);
+
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      normalized.walletBalance,
+      normalized.bankBalance,
+      normalized.bankMax,
+      null,
+      row.data
+    );
+
+    await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-test-clear',
+        amount: 0n,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return {
+      hadLoan,
+      ...buildLoanSnapshot(
+        null,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax
+      ),
+    };
+  });
+}
+
+async function forceLoanDefaultForTesting(userId, guildId) {
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+    let rowData = row.data;
+
+    if (normalized.changed) {
+      rowData = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        rowData
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    if (!normalized.loanState) {
+      throw new Error('No active loan to force default.');
+    }
+
+    const now = Date.now();
+    const forcedLoanState = {
+      ...normalized.loanState,
+      status: 'active',
+      dueAt: now - 1,
+      defaultedAt: null,
+    };
+
+    const forcedData = buildDataPayload(
+      rowData,
+      normalized.bankBalance,
+      normalized.bankMax,
+      forcedLoanState
+    );
+    const forcedRow = {
+      balance: normalized.walletBalance,
+      bank_balance: normalized.bankBalance.toString(),
+      bank_max: normalized.bankMax.toString(),
+      data: forcedData,
+    };
+    const forcedNormalized = normalizeLoanStateForRow(forcedRow, now);
+
+    await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      forcedNormalized.walletBalance,
+      forcedNormalized.bankBalance,
+      forcedNormalized.bankMax,
+      forcedNormalized.loanState,
+      forcedData
+    );
+
+    await addLoanNormalizationHistory(client, userId, guildId, forcedNormalized);
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: 'loan-test-force-default',
+        amount: 0n,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    return {
+      ...buildLoanSnapshot(
+        forcedNormalized.loanState,
+        forcedNormalized.walletBalance,
+        forcedNormalized.bankBalance,
+        forcedNormalized.bankMax
+      ),
+      penaltyAdded: forcedNormalized.penaltyAdded,
+      seizedOnDefault: forcedNormalized.seizedOnDefault,
     };
   });
 }
@@ -1338,6 +2242,14 @@ export default {
   depositToBank,
   withdrawFromBank,
   expandBankCapacity,
+  getLoanOptions,
+  getLoanReminderCandidates,
+  getLoanState,
+  consumeLoanReminderEvents,
+  takeLoan,
+  payLoan,
+  clearLoanForTesting,
+  forceLoanDefaultForTesting,
   getGuildStats,
   healthCheck,
   initializeDatabase,
