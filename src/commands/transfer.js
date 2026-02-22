@@ -57,7 +57,19 @@ class TransferCommand extends BaseCommand {
 
     try {
       // Perform transfer
-      const transaction = await economy.transferBalance(fromUserId, recipient.id, guildId, amount);
+      const transaction = await economy.transferBalance(
+        fromUserId,
+        recipient.id,
+        guildId,
+        amount,
+        'user-transfer'
+      );
+      if (transaction?.limited) {
+        const resetAtUnix = Math.floor(Number(transaction.resetAt ?? Date.now()) / 1000);
+        return message.reply(
+          `You can only transfer **2 times per 24 hours**. Try again <t:${resetAtUnix}:R>.`
+        );
+      }
 
       // Create embed
       const embed = new EmbedBuilder()

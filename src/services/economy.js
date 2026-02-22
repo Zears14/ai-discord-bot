@@ -97,6 +97,11 @@ const LOAN_OPTIONS = Array.isArray(CONFIG.ECONOMY.LOANS?.OPTIONS)
     }).filter(Boolean)
   : [];
 const LOAN_OPTIONS_BY_ID = new Map(LOAN_OPTIONS.map((option) => [option.id, option]));
+const USER_TRANSFER_REASON = 'user-transfer';
+const USER_TRANSFER_DAILY_LIMIT = 2;
+const USER_TRANSFER_WINDOW_MS = 24 * 60 * 60 * 1000;
+const USER_TRANSFER_WINDOW_START_KEY = 'userTransferWindowStart';
+const USER_TRANSFER_COUNT_KEY = 'userTransferWindowCount';
 
 /**
  * Cache utilities
@@ -192,6 +197,14 @@ async function safeQuery(query, params = [], retries = 3) {
 
 function asPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function parseNonNegativeInteger(value, fallback = 0) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
 }
 
 function getLoanOptionById(optionId) {
@@ -1291,6 +1304,30 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
     const toNewBalance = toBalance + parsedAmount;
     ensurePgBigIntRange(fromNewBalance, 'Sender resulting balance');
     ensurePgBigIntRange(toNewBalance, 'Recipient resulting balance');
+
+    if (reason === USER_TRANSFER_REASON) {
+      const nowMs = Date.now();
+      const windowStart = parseNonNegativeInteger(fromData[USER_TRANSFER_WINDOW_START_KEY], 0);
+      const previousCount = parseNonNegativeInteger(fromData[USER_TRANSFER_COUNT_KEY], 0);
+      const isWindowExpired = windowStart <= 0 || nowMs >= windowStart + USER_TRANSFER_WINDOW_MS;
+      const normalizedWindowStart = isWindowExpired ? nowMs : windowStart;
+      const normalizedCount = isWindowExpired ? 0 : previousCount;
+
+      if (normalizedCount >= USER_TRANSFER_DAILY_LIMIT) {
+        return {
+          limited: true,
+          limit: USER_TRANSFER_DAILY_LIMIT,
+          resetAt: normalizedWindowStart + USER_TRANSFER_WINDOW_MS,
+          reason,
+        };
+      }
+
+      fromData = {
+        ...asPlainObject(fromData),
+        [USER_TRANSFER_WINDOW_START_KEY]: normalizedWindowStart.toString(),
+        [USER_TRANSFER_COUNT_KEY]: (normalizedCount + 1).toString(),
+      };
+    }
 
     await persistEconomyState(
       client,
