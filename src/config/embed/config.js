@@ -11,6 +11,7 @@ export default {
     AI_RESPONSE: Colors.Green,
     IMAGE_LOADING: Colors.Purple,
     ERROR: Colors.Red,
+    WARNING: Colors.Yellow,
     DEFAULT: Colors.Blurple,
     SUCCESS: Colors.Green,
     ULTRA_GROWTH: Colors.Gold,

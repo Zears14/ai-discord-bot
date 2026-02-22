@@ -278,7 +278,7 @@ class CrimeCommand extends BaseCommand {
             }
 
             finalEmbed = new EmbedBuilder()
-              .setColor(CONFIG.COLORS.WARNING)
+              .setColor(CONFIG.COLORS.WARNING ?? CONFIG.COLORS.DEFAULT)
               .setTitle(`🚓 ${crime.label} Busted`)
               .setDescription(crime.failText || 'You got caught and paid a heavy fine.')
               .addFields(
