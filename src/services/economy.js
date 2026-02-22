@@ -98,10 +98,25 @@ const LOAN_OPTIONS = Array.isArray(CONFIG.ECONOMY.LOANS?.OPTIONS)
   : [];
 const LOAN_OPTIONS_BY_ID = new Map(LOAN_OPTIONS.map((option) => [option.id, option]));
 const USER_TRANSFER_REASON = 'user-transfer';
-const USER_TRANSFER_DAILY_LIMIT = 2;
+const LEVEL_STATE_KEY = CONFIG.ECONOMY.LEVELING?.STATE_KEY ?? 'levelData';
+const USER_TRANSFER_BASE_DAILY_LIMIT = 2;
 const USER_TRANSFER_WINDOW_MS = 24 * 60 * 60 * 1000;
 const USER_TRANSFER_WINDOW_START_KEY = 'userTransferWindowStart';
 const USER_TRANSFER_COUNT_KEY = 'userTransferWindowCount';
+const USER_TRANSFER_DAILY_LIMIT_BONUS_KEY = 'userTransferDailyLimitBonus';
+const USER_TRANSFER_DAILY_LIMIT_UPGRADE_COUNT_KEY = 'userTransferDailyLimitUpgradeCount';
+const USER_TRANSFER_MAX_BONUS_KEY = 'userTransferMaxPerTxBonus';
+const USER_TRANSFER_MAX_UPGRADE_COUNT_KEY = 'userTransferMaxUpgradeCount';
+const USER_TRANSFER_RECIPROCAL_LOCKS_KEY = 'userTransferReciprocalLocks';
+const USER_TRANSFER_RECIPROCAL_LOCK_MS = 30 * 60 * 1000;
+const USER_TRANSFER_MIN_LEVEL = 5;
+const USER_TRANSFER_LOW_LEVEL_THRESHOLD = 10;
+const USER_TRANSFER_LOW_LEVEL_MAX_PER_TX = 100n;
+const USER_TRANSFER_DEFAULT_MAX_PER_TX = 1500n;
+const USER_TRANSFER_MAX_UPGRADE_STEP = 250n;
+const USER_TRANSFER_UPGRADE_BASE_COST = 2500n;
+const USER_TRANSFER_UPGRADE_GROWTH_BPS = 18000n; // 1.8x
+const USER_TRANSFER_UPGRADE_GROWTH_DENOM = 10000n;
 
 /**
  * Cache utilities
@@ -205,6 +220,53 @@ function parseNonNegativeInteger(value, fallback = 0) {
     return fallback;
   }
   return parsed;
+}
+
+function parseNonNegativeBigInt(value, fallback = 0n) {
+  try {
+    const parsed = toBigInt(value ?? fallback, 'BigInt value');
+    return parsed >= 0n ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseLevelFromData(data) {
+  const rawLevelData = asPlainObject(data?.[LEVEL_STATE_KEY]);
+  return Math.max(1, parseNonNegativeInteger(rawLevelData.level, 1));
+}
+
+function getTransferMaxForLevel(level, bonus = 0n) {
+  const parsedLevel = Math.max(1, Math.floor(Number(level) || 1));
+  const base =
+    parsedLevel <= USER_TRANSFER_LOW_LEVEL_THRESHOLD
+      ? USER_TRANSFER_LOW_LEVEL_MAX_PER_TX
+      : USER_TRANSFER_DEFAULT_MAX_PER_TX;
+  return base + parseNonNegativeBigInt(bonus, 0n);
+}
+
+function calculateTransferUpgradeCost(upgradeCount) {
+  const parsedCount = Math.max(0, parseNonNegativeInteger(upgradeCount, 0));
+  let cost = USER_TRANSFER_UPGRADE_BASE_COST;
+  for (let i = 0; i < parsedCount; i++) {
+    cost =
+      (cost * USER_TRANSFER_UPGRADE_GROWTH_BPS + (USER_TRANSFER_UPGRADE_GROWTH_DENOM - 1n)) /
+      USER_TRANSFER_UPGRADE_GROWTH_DENOM;
+  }
+  return cost;
+}
+
+function sanitizeReciprocalLocks(rawLocks, nowMs = Date.now()) {
+  const normalized = asPlainObject(rawLocks);
+  const cleaned = {};
+  for (const [userId, untilRaw] of Object.entries(normalized)) {
+    const until = parseNonNegativeInteger(untilRaw, 0);
+    if (!userId || until <= nowMs) {
+      continue;
+    }
+    cleaned[userId] = until.toString();
+  }
+  return cleaned;
 }
 
 function getLoanOptionById(optionId) {
@@ -1252,10 +1314,26 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
   if (parsedAmount <= 0n) {
     throw new Error('Transfer amount must be a positive integer');
   }
+  if (fromUserId === toUserId) {
+    throw new Error('Cannot transfer to the same user');
+  }
 
   return withTransaction(async (client) => {
-    const fromRow = await getOrCreateLockedEconomyRow(client, fromUserId, guildId);
-    const toRow = await getOrCreateLockedEconomyRow(client, toUserId, guildId);
+    const lockOrder =
+      String(fromUserId) < String(toUserId)
+        ? [
+            { role: 'from', userId: fromUserId },
+            { role: 'to', userId: toUserId },
+          ]
+        : [
+            { role: 'to', userId: toUserId },
+            { role: 'from', userId: fromUserId },
+          ];
+
+    const firstLocked = await getOrCreateLockedEconomyRow(client, lockOrder[0].userId, guildId);
+    const secondLocked = await getOrCreateLockedEconomyRow(client, lockOrder[1].userId, guildId);
+    const fromRow = lockOrder[0].role === 'from' ? firstLocked : secondLocked;
+    const toRow = lockOrder[0].role === 'to' ? firstLocked : secondLocked;
 
     const fromNormalized = normalizeLoanStateForRow(fromRow);
     const toNormalized = normalizeLoanStateForRow(toRow);
@@ -1305,27 +1383,92 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
     ensurePgBigIntRange(fromNewBalance, 'Sender resulting balance');
     ensurePgBigIntRange(toNewBalance, 'Recipient resulting balance');
 
+    let transferMeta = null;
     if (reason === USER_TRANSFER_REASON) {
       const nowMs = Date.now();
-      const windowStart = parseNonNegativeInteger(fromData[USER_TRANSFER_WINDOW_START_KEY], 0);
-      const previousCount = parseNonNegativeInteger(fromData[USER_TRANSFER_COUNT_KEY], 0);
+      const senderData = asPlainObject(fromData);
+      const senderLevel = parseLevelFromData(senderData);
+      if (senderLevel < USER_TRANSFER_MIN_LEVEL) {
+        return {
+          levelBlocked: true,
+          requiredLevel: USER_TRANSFER_MIN_LEVEL,
+          currentLevel: senderLevel,
+          reason,
+        };
+      }
+
+      const dailyLimitBonus = parseNonNegativeInteger(
+        senderData[USER_TRANSFER_DAILY_LIMIT_BONUS_KEY],
+        0
+      );
+      const dailyLimit = USER_TRANSFER_BASE_DAILY_LIMIT + dailyLimitBonus;
+
+      const maxPerTransferBonus = parseNonNegativeBigInt(
+        senderData[USER_TRANSFER_MAX_BONUS_KEY],
+        0n
+      );
+      const maxPerTransfer = getTransferMaxForLevel(senderLevel, maxPerTransferBonus);
+      if (parsedAmount > maxPerTransfer) {
+        return {
+          maxExceeded: true,
+          level: senderLevel,
+          maxAllowed: maxPerTransfer,
+          attempted: parsedAmount,
+          reason,
+        };
+      }
+
+      const windowStart = parseNonNegativeInteger(senderData[USER_TRANSFER_WINDOW_START_KEY], 0);
+      const previousCount = parseNonNegativeInteger(senderData[USER_TRANSFER_COUNT_KEY], 0);
       const isWindowExpired = windowStart <= 0 || nowMs >= windowStart + USER_TRANSFER_WINDOW_MS;
       const normalizedWindowStart = isWindowExpired ? nowMs : windowStart;
       const normalizedCount = isWindowExpired ? 0 : previousCount;
 
-      if (normalizedCount >= USER_TRANSFER_DAILY_LIMIT) {
+      if (normalizedCount >= dailyLimit) {
         return {
           limited: true,
-          limit: USER_TRANSFER_DAILY_LIMIT,
+          limit: dailyLimit,
           resetAt: normalizedWindowStart + USER_TRANSFER_WINDOW_MS,
           reason,
         };
       }
 
+      const reciprocalLocks = sanitizeReciprocalLocks(
+        senderData[USER_TRANSFER_RECIPROCAL_LOCKS_KEY],
+        nowMs
+      );
+      const reciprocalBlockedUntil = parseNonNegativeInteger(reciprocalLocks[toUserId], 0);
+      if (reciprocalBlockedUntil > nowMs) {
+        return {
+          reciprocalLocked: true,
+          until: reciprocalBlockedUntil,
+          reason,
+        };
+      }
+
       fromData = {
-        ...asPlainObject(fromData),
+        ...senderData,
         [USER_TRANSFER_WINDOW_START_KEY]: normalizedWindowStart.toString(),
         [USER_TRANSFER_COUNT_KEY]: (normalizedCount + 1).toString(),
+        [USER_TRANSFER_RECIPROCAL_LOCKS_KEY]: reciprocalLocks,
+      };
+
+      const receiverData = asPlainObject(toData);
+      const receiverLocks = sanitizeReciprocalLocks(
+        receiverData[USER_TRANSFER_RECIPROCAL_LOCKS_KEY],
+        nowMs
+      );
+      receiverLocks[fromUserId] = (nowMs + USER_TRANSFER_RECIPROCAL_LOCK_MS).toString();
+      toData = {
+        ...receiverData,
+        [USER_TRANSFER_RECIPROCAL_LOCKS_KEY]: receiverLocks,
+      };
+
+      transferMeta = {
+        level: senderLevel,
+        usedToday: normalizedCount + 1,
+        dailyLimit,
+        maxPerTransfer,
       };
     }
 
@@ -1384,6 +1527,185 @@ async function transferBalance(fromUserId, toUserId, guildId, amount, reason = '
       to: { userId: toUserId, previousBalance: toBalance, newBalance: toNewBalance },
       amount: parsedAmount,
       reason,
+      transferMeta,
+    };
+  });
+}
+
+async function getTransferPolicy(userId, guildId) {
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+    let data = row.data;
+
+    if (normalized.changed) {
+      data = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        normalized.walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        data
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    const nowMs = Date.now();
+    const parsedData = asPlainObject(data);
+    const level = parseLevelFromData(parsedData);
+    const dailyLimitBonus = parseNonNegativeInteger(
+      parsedData[USER_TRANSFER_DAILY_LIMIT_BONUS_KEY],
+      0
+    );
+    const dailyLimitUpgradeCount = parseNonNegativeInteger(
+      parsedData[USER_TRANSFER_DAILY_LIMIT_UPGRADE_COUNT_KEY],
+      0
+    );
+    const maxBonus = parseNonNegativeBigInt(parsedData[USER_TRANSFER_MAX_BONUS_KEY], 0n);
+    const maxUpgradeCount = parseNonNegativeInteger(
+      parsedData[USER_TRANSFER_MAX_UPGRADE_COUNT_KEY],
+      0
+    );
+    const windowStart = parseNonNegativeInteger(parsedData[USER_TRANSFER_WINDOW_START_KEY], 0);
+    const previousCount = parseNonNegativeInteger(parsedData[USER_TRANSFER_COUNT_KEY], 0);
+    const isWindowExpired = windowStart <= 0 || nowMs >= windowStart + USER_TRANSFER_WINDOW_MS;
+    const normalizedWindowStart = isWindowExpired ? nowMs : windowStart;
+    const usedToday = isWindowExpired ? 0 : previousCount;
+    const dailyLimit = USER_TRANSFER_BASE_DAILY_LIMIT + dailyLimitBonus;
+    const maxPerTransfer = getTransferMaxForLevel(level, maxBonus);
+
+    return {
+      level,
+      canTransfer: level >= USER_TRANSFER_MIN_LEVEL,
+      requiredLevel: USER_TRANSFER_MIN_LEVEL,
+      usedToday,
+      dailyLimit,
+      remainingToday: Math.max(0, dailyLimit - usedToday),
+      resetAt: normalizedWindowStart + USER_TRANSFER_WINDOW_MS,
+      maxPerTransfer,
+      dailyLimitBonus,
+      maxPerTransferBonus: maxBonus,
+      nextUseUpgradeCost: calculateTransferUpgradeCost(dailyLimitUpgradeCount),
+      nextCapUpgradeCost: calculateTransferUpgradeCost(maxUpgradeCount),
+      capUpgradeStep: USER_TRANSFER_MAX_UPGRADE_STEP,
+    };
+  });
+}
+
+async function purchaseTransferUpgrade(userId, guildId, upgradeType) {
+  const normalizedType = typeof upgradeType === 'string' ? upgradeType.trim().toLowerCase() : '';
+  if (normalizedType !== 'uses' && normalizedType !== 'cap') {
+    throw new Error('Transfer upgrade type must be "uses" or "cap".');
+  }
+
+  return withTransaction(async (client) => {
+    const row = await getOrCreateLockedEconomyRow(client, userId, guildId);
+    const normalized = normalizeLoanStateForRow(row);
+    let walletBalance = normalized.walletBalance;
+    let data = row.data;
+
+    if (normalized.changed) {
+      data = await persistEconomyState(
+        client,
+        userId,
+        guildId,
+        walletBalance,
+        normalized.bankBalance,
+        normalized.bankMax,
+        normalized.loanState,
+        data
+      );
+      await addLoanNormalizationHistory(client, userId, guildId, normalized);
+    }
+
+    let dataPayload = asPlainObject(data);
+    const updatedData = { ...dataPayload };
+    const level = parseLevelFromData(dataPayload);
+    const dailyLimitBonus = parseNonNegativeInteger(
+      dataPayload[USER_TRANSFER_DAILY_LIMIT_BONUS_KEY],
+      0
+    );
+    const dailyLimitUpgradeCount = parseNonNegativeInteger(
+      dataPayload[USER_TRANSFER_DAILY_LIMIT_UPGRADE_COUNT_KEY],
+      0
+    );
+    const maxBonus = parseNonNegativeBigInt(dataPayload[USER_TRANSFER_MAX_BONUS_KEY], 0n);
+    const maxUpgradeCount = parseNonNegativeInteger(
+      dataPayload[USER_TRANSFER_MAX_UPGRADE_COUNT_KEY],
+      0
+    );
+
+    let cost;
+    let historyType;
+    if (normalizedType === 'uses') {
+      cost = calculateTransferUpgradeCost(dailyLimitUpgradeCount);
+      updatedData[USER_TRANSFER_DAILY_LIMIT_BONUS_KEY] = (dailyLimitBonus + 1).toString();
+      updatedData[USER_TRANSFER_DAILY_LIMIT_UPGRADE_COUNT_KEY] = (
+        dailyLimitUpgradeCount + 1
+      ).toString();
+      historyType = 'transfer-upgrade-uses';
+    } else {
+      cost = calculateTransferUpgradeCost(maxUpgradeCount);
+      updatedData[USER_TRANSFER_MAX_BONUS_KEY] = (
+        maxBonus + USER_TRANSFER_MAX_UPGRADE_STEP
+      ).toString();
+      updatedData[USER_TRANSFER_MAX_UPGRADE_COUNT_KEY] = (maxUpgradeCount + 1).toString();
+      historyType = 'transfer-upgrade-cap';
+    }
+
+    if (walletBalance < cost) {
+      throw new Error(`Insufficient balance: ${walletBalance} < ${cost}`);
+    }
+
+    walletBalance -= cost;
+    const persistedData = await persistEconomyState(
+      client,
+      userId,
+      guildId,
+      walletBalance,
+      normalized.bankBalance,
+      normalized.bankMax,
+      normalized.loanState,
+      updatedData
+    );
+
+    await historyService.addHistory(
+      {
+        userid: userId,
+        guildid: guildId,
+        type: historyType,
+        amount: -cost,
+      },
+      client
+    );
+
+    invalidateCache(userId, guildId);
+
+    dataPayload = asPlainObject(persistedData);
+    const newDailyLimitBonus = parseNonNegativeInteger(
+      dataPayload[USER_TRANSFER_DAILY_LIMIT_BONUS_KEY],
+      0
+    );
+    const newMaxBonus = parseNonNegativeBigInt(dataPayload[USER_TRANSFER_MAX_BONUS_KEY], 0n);
+
+    return {
+      type: normalizedType,
+      cost,
+      walletBalance,
+      level,
+      dailyLimit: USER_TRANSFER_BASE_DAILY_LIMIT + newDailyLimitBonus,
+      maxPerTransfer: getTransferMaxForLevel(level, newMaxBonus),
+      dailyLimitBonus: newDailyLimitBonus,
+      maxPerTransferBonus: newMaxBonus,
+      nextUseUpgradeCost: calculateTransferUpgradeCost(
+        parseNonNegativeInteger(dataPayload[USER_TRANSFER_DAILY_LIMIT_UPGRADE_COUNT_KEY], 0)
+      ),
+      nextCapUpgradeCost: calculateTransferUpgradeCost(
+        parseNonNegativeInteger(dataPayload[USER_TRANSFER_MAX_UPGRADE_COUNT_KEY], 0)
+      ),
+      capUpgradeStep: USER_TRANSFER_MAX_UPGRADE_STEP,
     };
   });
 }
@@ -2250,6 +2572,8 @@ export default {
   getUserData,
   getUserRank,
   transferBalance,
+  getTransferPolicy,
+  purchaseTransferUpgrade,
   getBankData,
   depositToBank,
   withdrawFromBank,
