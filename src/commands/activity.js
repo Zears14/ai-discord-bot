@@ -3,7 +3,39 @@ import BaseCommand from './BaseCommand.js';
 import CONFIG from '../config/config.js';
 import historyService from '../services/historyService.js';
 import logger from '../services/loggerService.js';
-import { formatMoney } from '../utils/moneyUtils.js';
+import { formatMoney, toBigInt } from '../utils/moneyUtils.js';
+
+function toSafeMoneyBigInt(value) {
+  try {
+    return toBigInt(value ?? 0n, 'Money');
+  } catch {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      try {
+        return toBigInt(Math.trunc(value), 'Money');
+      } catch {
+        return 0n;
+      }
+    }
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+
+      // Accept decimal strings from legacy numeric aggregates and floor them.
+      if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+        const asNumber = Number(trimmed);
+        if (Number.isFinite(asNumber)) {
+          try {
+            return toBigInt(Math.trunc(asNumber), 'Money');
+          } catch {
+            return 0n;
+          }
+        }
+      }
+    }
+
+    return 0n;
+  }
+}
 
 class ActivityCommand extends BaseCommand {
   constructor(client) {
@@ -39,9 +71,10 @@ class ActivityCommand extends BaseCommand {
 
       // Format activities into a readable list
       const formattedActivities = activities.map((activity) => {
+        const moneyAmount = toSafeMoneyBigInt(activity.amount);
         let description = `**${activity.type}**`;
-        if (activity.amount !== 0n) {
-          description += ` | ${activity.amount > 0n ? '+' : ''}${formatMoney(activity.amount)} cm`;
+        if (moneyAmount !== 0n) {
+          description += ` | ${moneyAmount > 0n ? '+' : ''}${formatMoney(moneyAmount)} cm`;
         }
         if (activity.item_name) {
           description += ` | ${activity.item_title || activity.item_name}`;
@@ -55,11 +88,15 @@ class ActivityCommand extends BaseCommand {
       // Add summary statistics
       const stats = await historyService.getUserStats(target.id, message.guild.id);
       if (stats) {
-        const netGains =
-          (stats.total_earned ?? 0n) + (stats.total_won ?? 0n) + (stats.total_lost ?? 0n);
+        const totalEarned = toSafeMoneyBigInt(stats.total_earned);
+        const totalWon = toSafeMoneyBigInt(stats.total_won);
+        const totalLost = toSafeMoneyBigInt(stats.total_lost);
+        const totalGambled = toSafeMoneyBigInt(stats.total_gambled);
+        const netGains = totalEarned + totalWon + totalLost;
+
         activityEmbed.addFields({
           name: '📊 Summary',
-          value: `Games Played: ${stats.games_played ?? 0n}\nTotal Gambled: ${formatMoney(stats.total_gambled ?? 0n)} cm\nNet Gains: ${formatMoney(netGains)} cm`,
+          value: `Games Played: ${stats.games_played ?? 0n}\nTotal Gambled: ${formatMoney(totalGambled)} cm\nNet Gains: ${formatMoney(netGains)} cm`,
         });
       }
 

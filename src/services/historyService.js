@@ -89,13 +89,13 @@ async function getUserStats(userid, guildid) {
                 'coinflip-win', 'coinflip-loss',
                 'dice-win', 'dice-loss'
             )) as games_played,
-            COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN (
+            FLOOR(COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN (
                 'slots', 'roulette', 'blackjack', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'blackjack-surrender',
                 'slots-bet', 'roulette-bet', 'coinflip-bet', 'dice-bet'
-            )), 0) as total_gambled,
-            COALESCE(SUM(amount) FILTER (WHERE type IN ('grow', 'daily')), 0) as total_earned,
-            COALESCE(SUM(amount) FILTER (WHERE amount > 0 AND type NOT IN ('grow', 'daily')), 0) as total_won,
-            COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0) as total_lost,
+            )), 0))::bigint as total_gambled,
+            FLOOR(COALESCE(SUM(amount) FILTER (WHERE type IN ('grow', 'daily')), 0))::bigint as total_earned,
+            FLOOR(COALESCE(SUM(amount) FILTER (WHERE amount > 0 AND type NOT IN ('grow', 'daily')), 0))::bigint as total_won,
+            FLOOR(COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0))::bigint as total_lost,
             COUNT(*) FILTER (WHERE type = 'daily') as daily_claims,
             COUNT(*) FILTER (WHERE type = 'grow') as grow_claims,
             COUNT(*) FILTER (WHERE type = 'use-item') as items_used
@@ -129,14 +129,14 @@ async function getGuildStats(guildid) {
                 'coinflip-win', 'coinflip-loss',
                 'dice-win', 'dice-loss'
             )) as total_games,
-            COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN (
+            FLOOR(COALESCE(SUM(ABS(amount)) FILTER (WHERE type IN (
                 'slots', 'roulette', 'blackjack', 'blackjack-win', 'blackjack-loss', 'blackjack-push', 'blackjack-surrender',
                 'slots-bet', 'roulette-bet', 'coinflip-bet', 'dice-bet'
-            )), 0) as total_gambled,
+            )), 0))::bigint as total_gambled,
             COUNT(DISTINCT type) as unique_activities,
-            COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) as total_gained,
-            COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0) as total_lost,
-            COALESCE(SUM(ABS(amount)), 0) as total_volume,
+            FLOOR(COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0))::bigint as total_gained,
+            FLOOR(COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0))::bigint as total_lost,
+            FLOOR(COALESCE(SUM(ABS(amount)), 0))::bigint as total_volume,
             COUNT(*) FILTER (WHERE type = 'daily') as daily_claims,
             COUNT(*) FILTER (WHERE type = 'grow') as grow_claims,
             COUNT(*) FILTER (WHERE type = 'use-item') as items_used
